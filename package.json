@@ -1,0 +1,19 @@
+{
+  "name": "@polymech/pm-audio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Portable audio session, ElevenLabs clients, voice-over, and the sound trigger. Settings, models, and LLM speech stay in the host.",
+  "scripts": {
+    "configure": "node scripts/cmake.mjs --preset dev",
+    "configure:release": "node scripts/cmake.mjs --preset release",
+    "build:cpp": "npm run configure && node scripts/cmake.mjs --build --preset dev --target pm-audio",
+    "build:cpp-fast": "node scripts/ninja.mjs --preset dev --target pm-audio",
+    "build:cpp:release": "npm run configure:release && node scripts/cmake.mjs --build --preset release --target pm-audio",
+    "test": "node tests/run.mjs",
+    "test:selftest": "node tests/test-selftest.mjs",
+    "test:match": "node tests/test-match.mjs",
+    "test:subs": "node tests/test-subs.mjs",
+    "test:build": "npm run build:cpp && npm test"
+  }
+}

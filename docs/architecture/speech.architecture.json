@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pm-audio speech engines",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1180, 540],
+    "views": [
+      { "id": "stt", "label": "Speech to text", "focus": ["factory", "stt", "whisper", "winai", "eleven"], "note": "Whisper compiles in when a whisper target exists. The plugin build fills WhisperBackend per call." },
+      { "id": "tts", "label": "Text to speech", "focus": ["factory", "tts", "windows", "vibe", "moss", "eleven"], "note": "VibeVoice is in-process, or a plugin table. MOSS Nano is a DLL. WinRT throws in a standalone build." }
+    ]
+  },
+  "components": [
+    { "id": "factory", "type": "frontend", "label": "speech_factory", "sublabel": "stays on the host", "pos": [30, 220], "size": [160, 64] },
+    { "id": "stt", "type": "backend", "label": "STT", "sublabel": "package engines", "pos": [260, 120], "size": [150, 60] },
+    { "id": "tts", "type": "backend", "label": "TTS", "sublabel": "package engines", "pos": [260, 320], "size": [150, 60] },
+    { "id": "whisper", "type": "backend", "label": "Whisper.cpp", "sublabel": "in-process or plugin", "pos": [500, 40], "size": [180, 60] },
+    { "id": "winai", "type": "backend", "label": "Windows AI STT", "sublabel": "WinRT or stub", "pos": [500, 160], "size": [180, 60] },
+    { "id": "eleven", "type": "cloud", "label": "ElevenLabs", "sublabel": "STT · TTS · change", "pos": [760, 40], "size": [180, 60] },
+    { "id": "windows", "type": "backend", "label": "Windows TTS", "sublabel": "WinRT or stub", "pos": [760, 220], "size": [180, 60] },
+    { "id": "vibe", "type": "backend", "label": "VibeVoice", "sublabel": "vv_capi or plugin", "pos": [760, 320], "size": [180, 60] },
+    { "id": "moss", "type": "backend", "label": "MOSS Nano", "sublabel": "soft-loaded DLL", "pos": [760, 420], "size": [180, 60] },
+    { "id": "gates", "type": "security", "label": "Host gates", "sublabel": "allow · cancel · ggml", "pos": [30, 400], "size": [160, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Compiled only when the parent provides them", "wraps": ["whisper", "winai", "windows", "vibe"] }
+  ],
+  "connections": [
+    { "id": "factory-stt", "from": "factory", "to": "stt", "label": "options", "variant": "emphasis" },
+    { "id": "factory-tts", "from": "factory", "to": "tts", "label": "options" },
+    { "id": "stt-whisper", "from": "stt", "to": "whisper" },
+    { "id": "stt-winai", "from": "stt", "to": "winai" },
+    { "id": "stt-eleven", "from": "stt", "to": "eleven", "label": "HTTPS" },
+    { "id": "tts-windows", "from": "tts", "to": "windows" },
+    { "id": "tts-vibe", "from": "tts", "to": "vibe" },
+    { "id": "tts-moss", "from": "tts", "to": "moss" },
+    { "id": "gates-factory", "from": "gates", "to": "factory", "fromSide": "top", "toSide": "bottom", "label": "install", "variant": "security" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Host still chooses", "items": ["speech_factory maps CLI flags and settings onto option structs. Proxy STT and TTS stay out of this library."] },
+    { "dot": "amber", "title": "Present or idle", "items": ["No whisper target means no whisper_full loop. No cppwinrt means the Windows engines throw. No DLL means that engine is idle."] },
+    { "dot": "rose", "title": "Gates", "items": ["The host installs the Whisper allow-gate, cancel, ggml loader, and the VibeVoice plugin table. The library does not see Group Policy."] }
+  ]
+}

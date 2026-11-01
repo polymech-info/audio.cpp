@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pm-audio session",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1180, 600],
+    "views": [
+      { "id": "lease", "label": "Lease", "focus": ["caller", "lease", "input", "playback"], "note": "preempt() decides allow, deny, or stop-the-holder. A device refuses to start without the current token." },
+      { "id": "capture", "label": "Capture", "focus": ["route", "input", "loopback", "echo", "ring"], "note": "The route stores a device descriptor. Echo uses a host WebRTC backend, or the mic stays dry." }
+    ]
+  },
+  "components": [
+    { "id": "caller", "type": "frontend", "label": "Caller", "sublabel": "dictation · playback · call", "pos": [30, 200], "size": [160, 64] },
+    { "id": "lease", "type": "security", "label": "Audio lease", "sublabel": "one owner per process", "tag": "preempt()", "pos": [260, 200], "size": [170, 64] },
+    { "id": "route", "type": "backend", "label": "Route", "sublabel": "type · product · address", "pos": [490, 40], "size": [180, 60] },
+    { "id": "input", "type": "backend", "label": "AudioInput", "sublabel": "mic · miniaudio", "pos": [490, 200], "size": [180, 64] },
+    { "id": "record", "type": "database", "label": "Record buffer", "sublabel": "RAM, then temp file", "pos": [490, 380], "size": [180, 60] },
+    { "id": "playback", "type": "backend", "label": "AudioOutput", "sublabel": "playback", "pos": [1000, 40], "size": [140, 60] },
+    { "id": "echo", "type": "security", "label": "Echo cancel", "sublabel": "WebRTC or dry", "pos": [760, 200], "size": [180, 64] },
+    { "id": "loopback", "type": "backend", "label": "Desktop loopback", "sublabel": "render reference", "pos": [760, 380], "size": [180, 60] },
+    { "id": "ring", "type": "messagebus", "label": "PCM ring", "sublabel": "one writer, one reader", "pos": [1020, 200], "size": [120, 64] },
+    { "id": "session-file", "type": "database", "label": "Session file", "sublabel": "other process", "pos": [490, 500], "size": [180, 56] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "Needs a live lease token", "wraps": ["input", "playback", "loopback"] }
+  ],
+  "connections": [
+    { "id": "caller-lease", "from": "caller", "to": "lease", "label": "acquire", "variant": "emphasis" },
+    { "id": "lease-input", "from": "lease", "to": "input", "label": "token", "variant": "security" },
+    { "id": "route-input", "from": "route", "to": "input", "fromSide": "bottom", "toSide": "top", "label": "opened?", "labelAt": [620, 150] },
+    { "id": "input-echo", "from": "input", "to": "echo", "label": "capture" },
+    { "id": "loop-echo", "from": "loopback", "to": "echo", "fromSide": "top", "toSide": "bottom", "label": "reference", "labelAt": [890, 340], "variant": "dashed" },
+    { "id": "echo-ring", "from": "echo", "to": "ring", "label": "PCM" },
+    { "id": "ring-play", "from": "ring", "to": "playback", "fromSide": "top", "toSide": "bottom", "label": "play", "labelAt": [1120, 150] },
+    { "id": "input-record", "from": "input", "to": "record", "fromSide": "bottom", "toSide": "top", "label": "spill", "labelAt": [620, 330] },
+    { "id": "record-file", "from": "record", "to": "session-file", "fromSide": "bottom", "toSide": "top", "label": "status", "labelAt": [620, 470] }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "Lease", "items": ["Allow, deny, or preempt. PhoneCall is an external holder. Release only matches the current token."] },
+    { "dot": "cyan", "title": "Route", "items": ["A saved profile stores type, product, and address. aaudio:<id> is valid only for the current list."] },
+    { "dot": "emerald", "title": "Record", "items": ["PCM stays in RAM, then spills. Windows AAC uses Media Foundation. The session file lets another process stop the take."] }
+  ]
+}

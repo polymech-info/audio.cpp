@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pm-audio voice pipeline",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1160, 520],
+    "views": [
+      { "id": "adapters", "label": "Host adapters", "focus": ["host", "adapters", "pipeline"], "note": "voice_session stays on the host. It fills capture, enhancement, and transcription function pointers." },
+      { "id": "utterance", "label": "One utterance", "focus": ["pipeline", "enhance", "match", "stt", "callbacks"], "note": "PCM is resampled to 16 kHz mono, enhanced, matched for a wake word, then transcribed." }
+    ]
+  },
+  "components": [
+    { "id": "host", "type": "frontend", "label": "voice_session", "sublabel": "stays on the host", "pos": [30, 200], "size": [160, 64] },
+    { "id": "adapters", "type": "external", "label": "VoiceAdapters", "sublabel": "function pointers", "pos": [250, 200], "size": [170, 64] },
+    { "id": "pipeline", "type": "backend", "label": "VoicePipeline", "sublabel": "worker thread", "tag": "inject or capture", "pos": [480, 200], "size": [170, 64] },
+    { "id": "capture", "type": "backend", "label": "Capture adapter", "sublabel": "mic · desktop · mix", "pos": [740, 60], "size": [180, 60] },
+    { "id": "enhance", "type": "backend", "label": "Enhancer", "sublabel": "DeepFilter or GTCRN", "pos": [740, 180], "size": [180, 60] },
+    { "id": "match", "type": "backend", "label": "VAD and wake", "sublabel": "16 kHz mono", "pos": [740, 300], "size": [180, 60] },
+    { "id": "stt", "type": "backend", "label": "Transcription adapter", "sublabel": "host picks the engine", "pos": [740, 420], "size": [180, 60] },
+    { "id": "callbacks", "type": "messagebus", "label": "Route callbacks", "sublabel": "trigger · transcript · state", "pos": [980, 240], "size": [150, 64] }
+  ],
+  "connections": [
+    { "id": "host-adapters", "from": "host", "to": "adapters", "label": "install", "variant": "emphasis" },
+    { "id": "adapters-pipeline", "from": "adapters", "to": "pipeline", "label": "start", "variant": "emphasis" },
+    { "id": "pipeline-capture", "from": "pipeline", "to": "capture", "fromSide": "top", "toSide": "left" },
+    { "id": "pipeline-enhance", "from": "pipeline", "to": "enhance" },
+    { "id": "pipeline-match", "from": "pipeline", "to": "match" },
+    { "id": "pipeline-stt", "from": "pipeline", "to": "stt", "fromSide": "bottom", "toSide": "left" },
+    { "id": "match-cb", "from": "match", "to": "callbacks", "label": "wake" },
+    { "id": "stt-cb", "from": "stt", "to": "callbacks", "fromSide": "right", "toSide": "bottom", "label": "text" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Adapters", "items": ["The pipeline does not open Whisper or a device itself. The host supplies those three callbacks."] },
+    { "dot": "emerald", "title": "Utterance", "items": ["Enhance, blend wet with dry, then match. Replay feeds the same worker without a live mic."] },
+    { "dot": "violet", "title": "Back to the host", "items": ["Trigger, cancel, state, error, and transcript go out through RouteCallbacks. Settings stay in voice_session."] }
+  ]
+}
