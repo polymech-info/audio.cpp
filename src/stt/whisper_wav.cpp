@@ -1,4 +1,5 @@
 #include "pm/audio/stt/wav.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -9,12 +10,6 @@
 
 namespace pm::stt {
 namespace {
-
-std::filesystem::path path_from_utf8(const std::string& path)
-{
-    return std::filesystem::path(
-        std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size()));
-}
 
 std::uint32_t rd_u32(const std::uint8_t* p)
 {
@@ -49,7 +44,7 @@ static_assert(sizeof(WavHdr) == 44, "WavHdr must be 44 bytes");
 
 WavPcm read_wav(const std::string& path)
 {
-    std::ifstream f(path_from_utf8(path), std::ios::binary);
+    std::ifstream f(media::path::path_from_utf8(path), std::ios::binary);
     if (!f)
         throw std::runtime_error("whisper_local: cannot open WAV: " + path);
     std::vector<std::uint8_t> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
@@ -142,7 +137,7 @@ bool write_pcm_wav(const std::string& path,
                    std::size_t n_samples,
                    int sample_rate)
 {
-    std::ofstream f(path_from_utf8(path), std::ios::binary | std::ios::trunc);
+    std::ofstream f(media::path::path_from_utf8(path), std::ios::binary | std::ios::trunc);
     if (!f)
         return false;
     const std::uint32_t data_bytes = static_cast<std::uint32_t>(n_samples * sizeof(short));

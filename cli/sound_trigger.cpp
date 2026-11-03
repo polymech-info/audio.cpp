@@ -1,4 +1,5 @@
 #include "sound_trigger.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #include "pm/audio/devices.hpp"
 #include "pm/audio/trigger/sound_trigger.hpp"
@@ -197,7 +198,7 @@ bool write_inspect_plot(const std::filesystem::path& path,
     svg << "</svg>\n";
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) {
-        error = "cannot write plot: " + path.string();
+        error = "cannot write plot: " + media::path::path_to_utf8(path);
         return false;
     }
     out << svg.str();

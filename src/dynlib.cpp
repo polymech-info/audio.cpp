@@ -1,4 +1,5 @@
 #include "pm/audio/dynlib.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #include <filesystem>
 
@@ -66,7 +67,7 @@ void* load(const std::string& name, const std::string& search_dir) noexcept
         return wide;
     };
     if (!search_dir.empty()) {
-        const std::filesystem::path full = std::filesystem::path(search_dir) / name;
+        const std::filesystem::path full = media::path::path_from_utf8(search_dir) / name;
         HMODULE module = ::LoadLibraryExW(full.wstring().c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
         if (module)
             return static_cast<void*>(module);
@@ -80,7 +81,7 @@ void* load(const std::string& name, const std::string& search_dir) noexcept
     if (name.empty())
         return nullptr;
     if (!search_dir.empty()) {
-        const std::filesystem::path full = std::filesystem::path(search_dir) / name;
+        const std::filesystem::path full = media::path::path_from_utf8(search_dir) / name;
         if (void* handle = ::dlopen(full.c_str(), RTLD_LAZY))
             return handle;
     }

@@ -2,6 +2,7 @@
 #include "pm/audio/echo.hpp"
 #include "pm/audio/log.hpp"
 #include "pm/audio/path.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #if defined(_MSC_VER)
 #  pragma warning(push, 0)
@@ -27,16 +28,6 @@
 #include <vector>
 
 namespace pm::audio {
-
-namespace {
-
-std::filesystem::path path_from_utf8_local(const std::string& text)
-{
-    return std::filesystem::path(
-        std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
-}
-
-} // namespace
 
 DevicePrepareFn& device_prepare_slot()
 {
@@ -1206,7 +1197,7 @@ void play_sound_file_async(const std::string& file_path) {
 
     // Resolve relative paths against current working directory.
     namespace fs = std::filesystem;
-    fs::path path = path_from_utf8_local(file_path);
+    fs::path path = media::path::path_from_utf8(file_path);
     if (path.is_relative()) {
         path = fs::absolute(path);
     }
@@ -1214,18 +1205,18 @@ void play_sound_file_async(const std::string& file_path) {
     // Read the entire file into memory.
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs) {
-        throw std::runtime_error("play_sound_file: cannot open: " + pm::audio::path_u8(path));
+        throw std::runtime_error("play_sound_file: cannot open: " + media::path::path_to_utf8(path));
     }
 
     const auto size = ifs.tellg();
     if (size <= 0) {
-        throw std::runtime_error("play_sound_file: empty file: " + pm::audio::path_u8(path));
+        throw std::runtime_error("play_sound_file: empty file: " + media::path::path_to_utf8(path));
     }
 
     ifs.seekg(0, std::ios::beg);
     std::vector<uint8_t> buffer(static_cast<size_t>(size));
     if (!ifs.read(reinterpret_cast<char*>(buffer.data()), size)) {
-        throw std::runtime_error("play_sound_file: read error: " + pm::audio::path_u8(path));
+        throw std::runtime_error("play_sound_file: read error: " + media::path::path_to_utf8(path));
     }
     ifs.close();
 
@@ -1265,18 +1256,18 @@ void play_sound_file_sync(const std::string& file_path,
     stop_sound_file(); // stop any previous playback
 
     namespace fs = std::filesystem;
-    fs::path path = path_from_utf8_local(file_path);
+    fs::path path = media::path::path_from_utf8(file_path);
     if (path.is_relative())
         path = fs::absolute(path);
 
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
-    if (!ifs) throw std::runtime_error("play_sound_file_sync: cannot open: " + pm::audio::path_u8(path));
+    if (!ifs) throw std::runtime_error("play_sound_file_sync: cannot open: " + media::path::path_to_utf8(path));
     const auto sz = ifs.tellg();
-    if (sz <= 0) throw std::runtime_error("play_sound_file_sync: empty file: " + pm::audio::path_u8(path));
+    if (sz <= 0) throw std::runtime_error("play_sound_file_sync: empty file: " + media::path::path_to_utf8(path));
     ifs.seekg(0, std::ios::beg);
     std::vector<uint8_t> buf(static_cast<size_t>(sz));
     if (!ifs.read(reinterpret_cast<char*>(buf.data()), sz))
-        throw std::runtime_error("play_sound_file_sync: read error: " + pm::audio::path_u8(path));
+        throw std::runtime_error("play_sound_file_sync: read error: " + media::path::path_to_utf8(path));
     ifs.close();
 
     std::shared_ptr<AudioOutput> player;

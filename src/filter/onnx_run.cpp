@@ -2,6 +2,7 @@
 
 #include "pm/audio/dynlib.hpp"
 #include "pm/audio/path.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #include <mutex>
 #include <numeric>
@@ -38,7 +39,7 @@ bool load_ort() noexcept
                 return pm::audio::dynlib::load("onnxruntime.dll");
             return pm::audio::dynlib::load("onnxruntime.dll", dir);
         };
-        void* module = try_load(path_u8(exe_directory()));
+        void* module = try_load(media::path::path_to_utf8(exe_directory()));
 #if defined(PM_AUDIO_ONNX_ROOT)
         if (!module)
             module = try_load(std::string(PM_AUDIO_ONNX_ROOT) + "/lib");
@@ -87,8 +88,7 @@ struct Session::Impl {
             opts.SetIntraOpNumThreads(1);
             opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 #if defined(_WIN32)
-            const std::filesystem::path wide = std::filesystem::path(std::u8string(
-                reinterpret_cast<const char8_t*>(model_path.data()), model_path.size()));
+            const std::filesystem::path wide = media::path::path_from_utf8(model_path);
             session = std::make_unique<Ort::Session>(*env, wide.wstring().c_str(), opts);
 #else
             session = std::make_unique<Ort::Session>(*env, model_path.c_str(), opts);

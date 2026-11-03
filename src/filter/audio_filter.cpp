@@ -5,6 +5,7 @@
 #include "pm/audio/filter/gtcrn.hpp"
 #include "pm/audio/log.hpp"
 #include "pm/audio/path.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #if defined(_MSC_VER)
 #  pragma warning(push, 0)
@@ -62,7 +63,7 @@ bool decode_to_mono(const std::filesystem::path& src,
                     std::vector<float>& pcm,
                     std::string& err)
 {
-    const std::string path = pm::audio::path_u8(src);
+    const std::string path = media::path::path_to_utf8(src);
     ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 1, sample_rate);
     ma_decoder decoder{};
     const ma_result init = ma_decoder_init_file(path.c_str(), &cfg, &decoder);
@@ -276,7 +277,7 @@ Result apply_file(const std::filesystem::path& src,
     r.channels = 1;
     r.frames = static_cast<uint64_t>(s16.size());
     r.kind = kind_name(opt.kind);
-    pm::audio::log::info("[audio-filter] wrote " + pm::audio::path_u8(dst)
+    pm::audio::log::info("[audio-filter] wrote " + media::path::path_to_utf8(dst)
                  + " backend=" + r.backend
                  + " frames=" + std::to_string(r.frames));
     return r;
@@ -322,7 +323,7 @@ std::int64_t duration_ms(const std::filesystem::path& src)
 {
     if (src.empty())
         return 0;
-    const std::string path = pm::audio::path_u8(src);
+    const std::string path = media::path::path_to_utf8(src);
     ma_decoder decoder{};
     if (ma_decoder_init_file(path.c_str(), nullptr, &decoder) != MA_SUCCESS)
         return 0;

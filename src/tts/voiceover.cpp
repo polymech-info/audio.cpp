@@ -1,19 +1,10 @@
 #include "pm/audio/tts/voiceover.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #include "pm/audio/log.hpp"
 
 #include <filesystem>
 #include <string>
-
-namespace {
-
-std::string path_u8(const std::filesystem::path& path)
-{
-    const auto bytes = path.u8string();
-    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-}
-
-} // namespace
 
 #if defined(_MSC_VER)
 #  pragma warning(push, 0)
@@ -502,7 +493,7 @@ bool load_cues(const std::string& input, std::vector<pm::subs::Cue>& cues, std::
     std::error_code ec;
     const std::filesystem::path path(trimmed);
     if (std::filesystem::is_regular_file(path, ec) && !ec) {
-        std::string ext = path.extension().string();
+        std::string ext = media::path::path_to_utf8(path.extension());
         ext = lower_ascii(ext);
         if (ext == ".json") {
             std::ifstream f(path, std::ios::binary);
@@ -873,12 +864,12 @@ bool render_timeline(const std::vector<pm::subs::Cue>& cues,
         return false;
 
     const auto report_path = dst_wav.parent_path()
-        / (dst_wav.stem().string() + ".voiceover.json");
+        / (media::path::path_to_utf8(dst_wav.stem()) + ".voiceover.json");
     {
         std::ofstream rf(report_path, std::ios::trunc);
         rf << report_to_json(report).dump(2);
     }
-    pm::audio::log::info("[voiceover] wrote " + path_u8(dst_wav)
+    pm::audio::log::info("[voiceover] wrote " + media::path::path_to_utf8(dst_wav)
                  + " utterances=" + std::to_string(report.utterances)
                  + " natural=" + std::to_string(report.natural)
                  + " used_gap=" + std::to_string(report.used_gap)

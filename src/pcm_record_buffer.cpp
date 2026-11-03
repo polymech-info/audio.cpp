@@ -1,4 +1,5 @@
 #include "pm/audio/pcm_record.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -40,7 +41,7 @@ std::filesystem::path make_spill_path()
     namespace fs = std::filesystem;
     std::error_code ec;
     fs::path base = fs::temp_directory_path(ec);
-    if (ec) base = fs::path(".");
+    if (ec) base = media::path::path_from_utf8(".");
     const auto tag = std::chrono::steady_clock::now().time_since_epoch().count();
     return base / ("pm-pcm-spill-" + std::to_string(tag) + ".raw");
 }

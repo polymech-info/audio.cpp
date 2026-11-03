@@ -1,4 +1,5 @@
 #include "pm/audio/path.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -29,14 +30,14 @@ std::filesystem::path exe_directory()
     uint32_t size = sizeof(buf);
     if (_NSGetExecutablePath(buf, &size) != 0)
         return {};
-    return std::filesystem::path(buf).parent_path();
+    return media::path::path_from_utf8(buf).parent_path();
 #else
     char buf[4096];
     const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
     if (n <= 0)
         return {};
     buf[n] = '\0';
-    return std::filesystem::path(buf).parent_path();
+    return media::path::path_from_utf8(buf).parent_path();
 #endif
 }
 

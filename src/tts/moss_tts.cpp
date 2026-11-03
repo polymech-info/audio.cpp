@@ -1,4 +1,5 @@
 #include "pm/audio/tts/moss_tts.hpp"
+#include "fs/path_sanitizer.hpp"
 #include "pm/audio/dynlib.hpp"
 #include "pm/audio/log.hpp"
 #include "pm/audio/path.hpp"
@@ -128,10 +129,10 @@ bool ensure_api()
             std::error_code ec;
             if (!std::filesystem::is_regular_file(dir / name, ec) || ec)
                 continue;
-            void* module = pm::audio::dynlib::load(name, pm::audio::path_u8(dir));
+            void* module = pm::audio::dynlib::load(name, media::path::path_to_utf8(dir));
             if (!module) {
                 pm::audio::log::warn("[moss-tts] probe found " +
-                             pm::audio::path_u8(dir / name) + " but load failed");
+                             media::path::path_to_utf8(dir / name) + " but load failed");
                 continue;
             }
             if (!bind_api(module, state)) {
@@ -139,7 +140,7 @@ bool ensure_api()
                 continue;
             }
             state.module = module;
-            state.loaded_path = pm::audio::path_u8(dir / name);
+            state.loaded_path = media::path::path_to_utf8(dir / name);
             state.error.clear();
             const char* ver = state.version ? state.version() : "";
             pm::audio::log::info("[moss-tts] loaded " + state.loaded_path +
@@ -193,7 +194,7 @@ bool write_pcm16_wav(const std::string& path,
         return false;
 
     std::error_code ec;
-    const auto parent = std::filesystem::path(path).parent_path();
+    const auto parent = media::path::path_from_utf8(path).parent_path();
     if (!parent.empty())
         std::filesystem::create_directories(parent, ec);
     if (ec)
@@ -434,7 +435,7 @@ nlohmann::json MossNanoEngine::loaded_models_json() const
     return nlohmann::json::array({{
         {"key", "moss:tts"},
         {"kind", "moss-tts-nano"},
-        {"name", std::filesystem::path(model_).filename().string()},
+        {"name", media::path::path_to_utf8(media::path::path_from_utf8(model_).filename())},
         {"path", model_},
         {"codecPath", codec_},
         {"tokenizerPath", tokenizer_},

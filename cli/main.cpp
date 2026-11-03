@@ -1,4 +1,5 @@
 #include "pm/audio/devices.hpp"
+#include "fs/path_sanitizer.hpp"
 #if defined(PM_AUDIO_SOUND_TRIGGER) && PM_AUDIO_SOUND_TRIGGER
 #include "sound_trigger.hpp"
 #endif
@@ -314,7 +315,7 @@ int cmd_record_wav(const std::string& dst)
     buffer.push(pcm.data(), 480);
     if (!buffer.write_wav(dst))
         return fail("EIO", "could not write wav", 400);
-    std::string ext = std::filesystem::path(dst).extension().string();
+    std::string ext = media::path::path_to_utf8(media::path::path_from_utf8(dst).extension());
     ext = media::strutil::lower_ascii(std::move(ext));
     const bool aac = pm::audio::record_container_from_extension(ext) == pm::audio::RecordContainer::Aac;
     nlohmann::json body = {

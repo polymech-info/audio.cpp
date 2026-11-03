@@ -1,4 +1,5 @@
 #include "pm/audio/tts/vibevoice_tts.hpp"
+#include "fs/path_sanitizer.hpp"
 #if defined(PM_AUDIO_LINK_VIBEVOICE) && PM_AUDIO_LINK_VIBEVOICE
 #include <vibevoice_capi.h>
 #endif
@@ -182,7 +183,7 @@ nlohmann::json VibevoiceEngine::loaded_models_json() const
         {
             {"key", "vibevoice:tts"},
             {"kind", "vibevoice-tts"},
-            {"name", std::filesystem::path(model_).filename().string()},
+            {"name", media::path::path_to_utf8(media::path::path_from_utf8(model_).filename())},
             {"path", model_},
             {"tokenizerPath", tokenizer_},
             {"voicePath", voice_},
@@ -274,7 +275,7 @@ int vibevoice_tts_synthesize_pcm(
     if (rc != 0) return rc;
 
     namespace fs = std::filesystem;
-    const std::string tmp = (fs::temp_directory_path() / "vv_tts_tmp.wav").string();
+    const std::string tmp = media::path::path_to_utf8((fs::temp_directory_path() / "vv_tts_tmp.wav"));
 
     const auto t0 = std::chrono::steady_clock::now();
     rc = eng.tts(text, voice_path, ref_audio_path, tmp, steps, cfg, max_frames, seed);

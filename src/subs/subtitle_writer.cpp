@@ -1,4 +1,5 @@
 #include "pm/audio/subs/subtitle_writer.hpp"
+#include "fs/path_sanitizer.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -131,12 +132,12 @@ bool write_utf8_file(const std::filesystem::path& path,
 {
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     if (!f) {
-        err = "could not write " + path.string();
+        err = "could not write " + media::path::path_to_utf8(path);
         return false;
     }
     f.write(body.data(), static_cast<std::streamsize>(body.size()));
     if (!f) {
-        err = "write failed: " + path.string();
+        err = "write failed: " + media::path::path_to_utf8(path);
         return false;
     }
     return true;
@@ -459,7 +460,7 @@ namespace {
 
 bool stem_ext_is(const std::filesystem::path& stem, std::initializer_list<const char*> exts)
 {
-    std::string e = stem.extension().string();
+    std::string e = media::path::path_to_utf8(stem.extension());
     e = media::strutil::lower_ascii(std::move(e));
     for (const char* x : exts) {
         if (e == x)
@@ -747,7 +748,7 @@ bool read_vtt(const std::filesystem::path& path, std::vector<Cue>& cues, std::st
 
 bool read_cues_file(const std::filesystem::path& path, std::vector<Cue>& cues, std::string& err)
 {
-    std::string ext = path.extension().string();
+    std::string ext = media::path::path_to_utf8(path.extension());
     ext = media::strutil::lower_ascii(std::move(ext));
     if (ext == ".vtt")
         return read_vtt(path, cues, err);

@@ -4,6 +4,7 @@
 #include "pm/audio/dynlib.hpp"
 #include "pm/audio/filter/models.hpp"
 #include "pm/audio/path.hpp"
+#include "fs/path_sanitizer.hpp"
 #include "pm/audio/filter/deep_filter_capi.h"
 #include "pm/audio/log.hpp"
 
@@ -122,13 +123,13 @@ bool ensure_loaded()
 
     for (const auto& dir : dll_search_dirs()) {
         for (const char* name : k_dll_names) {
-            void* module = pm::audio::dynlib::load(name, pm::audio::path_u8(dir));
+            void* module = pm::audio::dynlib::load(name, media::path::path_to_utf8(dir));
             if (!module)
                 continue;
             if (!bind_api(module, state))
                 continue;
             state.module = module;
-            state.loaded_path = pm::audio::path_u8(dir / name);
+            state.loaded_path = media::path::path_to_utf8(dir / name);
             state.error.clear();
             pm::audio::log::info("[audio-filter] loaded " + state.loaded_path);
             return true;
@@ -178,7 +179,7 @@ bool run_tar_czf(const fs::path& src_dir, const fs::path& dest, std::string& err
         err = "GetWindowsDirectoryW failed";
         return false;
     }
-    const fs::path tar = fs::path(windir) / L"System32" / L"tar.exe";
+    const fs::path tar = std::filesystem::path(windir) / L"System32" / L"tar.exe";
     if (!fs::is_regular_file(tar)) {
         err = "System32 tar.exe not found";
         return false;
@@ -258,7 +259,7 @@ bool enhance_capi(std::vector<float>& pcm, const Options& opt, const std::filesy
         return false;
     }
     const DfApi& fn = api();
-    const std::string model_utf8 = pm::audio::path_u8(libdf_model);
+    const std::string model_utf8 = media::path::path_to_utf8(libdf_model);
     DFState* st = fn.create(model_utf8.c_str(), opt.atten_lim_db, nullptr);
     if (!st) {
         r.error = "df_create failed";
@@ -307,7 +308,7 @@ bool enhance_capi(std::vector<float>& pcm, const Options& opt, const std::filesy
 std::filesystem::path discover_model(const std::string& explicit_path)
 {
     const auto probe = probe_deepfilter_model(explicit_path);
-    return probe.path.empty() ? std::filesystem::path{} : std::filesystem::path(probe.path);
+    return probe.path.empty() ? std::filesystem::path{} : media::path::path_from_utf8(probe.path);
 }
 
 bool available()
@@ -402,7 +403,7 @@ bool StreamSession::open(const Options& opt, std::string& err)
         return false;
     const DfApi& fn = api();
     auto impl = std::make_unique<Impl>();
-    impl->st = fn.create(pm::audio::path_u8(libdf_model).c_str(), opt.atten_lim_db, nullptr);
+    impl->st = fn.create(media::path::path_to_utf8(libdf_model).c_str(), opt.atten_lim_db, nullptr);
     if (!impl->st) {
         err = "df_create failed";
         return false;

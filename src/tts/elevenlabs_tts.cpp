@@ -1,4 +1,5 @@
 #include "pm/audio/tts/elevenlabs_tts.hpp"
+#include "fs/path_sanitizer.hpp"
 #include "pm/audio/tts/elevenlabs_voice_change.hpp"
 #include "pm/audio/constants.hpp"
 
@@ -444,8 +445,8 @@ std::vector<uint8_t> elevenlabs_voice_change(
     try {
         curl_mimepart* audio_part = curl_mime_addpart(mime);
         if (!audio_part || curl_mime_name(audio_part, "audio") != CURLE_OK
-            || curl_mime_filedata(audio_part, source_path.string().c_str()) != CURLE_OK
-            || curl_mime_filename(audio_part, source_path.filename().string().c_str()) != CURLE_OK
+            || curl_mime_filedata(audio_part, media::path::path_to_utf8(source_path).c_str()) != CURLE_OK
+            || curl_mime_filename(audio_part, media::path::path_to_utf8(source_path.filename()).c_str()) != CURLE_OK
             || curl_mime_type(audio_part, "application/octet-stream") != CURLE_OK)
             throw std::runtime_error(
                 "elevenlabs_voice_change: could not add source audio to multipart body");
