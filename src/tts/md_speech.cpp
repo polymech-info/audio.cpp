@@ -7,6 +7,7 @@
 
 #if defined(PM_AUDIO_HAS_MD4C) && PM_AUDIO_HAS_MD4C
 #include <md4c.h>
+#include "string/string_utils.hpp"
 #endif
 
 namespace pm::tts {
@@ -55,8 +56,7 @@ void collapse_ws_for_speech(std::string& s)
 bool ext_is_markdown(const std::filesystem::path& path)
 {
     std::string ext = path.extension().string();
-    for (char& c : ext)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    ext = media::strutil::lower_ascii(std::move(ext));
     return ext == ".md" || ext == ".markdown" || ext == ".mdx";
 }
 

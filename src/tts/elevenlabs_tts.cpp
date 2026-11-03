@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "string/string_utils.hpp"
 
 namespace C = pm::audio::constants;
 
@@ -171,8 +172,7 @@ static size_t curl_header_stream(char* buffer, size_t size, size_t nitems, void*
     constexpr size_t k_prefix_len = 11; // "request-id:"
     if (total > k_prefix_len) {
         std::string prefix(buffer, k_prefix_len);
-        for (auto& ch : prefix)
-            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        prefix = media::strutil::lower_ascii(std::move(prefix));
         if (prefix == "request-id:") {
             std::string value(buffer + k_prefix_len, total - k_prefix_len);
             const auto b = value.find_first_not_of(" \t\r\n");
@@ -206,8 +206,7 @@ size_t curl_capture_request_id(char* buffer, size_t size, size_t nitems, void* u
     constexpr size_t k_prefix_len = 11; // "request-id:"
     if (total > k_prefix_len) {
         std::string prefix(buffer, k_prefix_len);
-        for (auto& ch : prefix)
-            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        prefix = media::strutil::lower_ascii(std::move(prefix));
         if (prefix == "request-id:") {
             std::string value(buffer + k_prefix_len, total - k_prefix_len);
             const auto b = value.find_first_not_of(" \t\r\n");

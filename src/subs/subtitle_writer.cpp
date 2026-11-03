@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <sstream>
 #include <system_error>
+#include "string/string_utils.hpp"
 
 namespace pm::subs {
 namespace {
@@ -430,10 +431,7 @@ bool write_format(Format fmt,
 
 std::vector<Format> parse_format_list(std::string token)
 {
-    for (char& c : token) {
-        if (c >= 'A' && c <= 'Z')
-            c = static_cast<char>(c - 'A' + 'a');
-    }
+    token = media::strutil::lower_ascii(std::move(token));
     if (token.empty() || token == "off" || token == "none" || token == "false")
         return {};
     if (token == "all")
@@ -462,10 +460,7 @@ namespace {
 bool stem_ext_is(const std::filesystem::path& stem, std::initializer_list<const char*> exts)
 {
     std::string e = stem.extension().string();
-    for (char& c : e) {
-        if (c >= 'A' && c <= 'Z')
-            c = static_cast<char>(c - 'A' + 'a');
-    }
+    e = media::strutil::lower_ascii(std::move(e));
     for (const char* x : exts) {
         if (e == x)
             return true;
@@ -701,8 +696,7 @@ bool read_vtt(const std::filesystem::path& path, std::vector<Cue>& cues, std::st
     size_t i = 0;
     if (i < lines.size()) {
         std::string head = trim_copy(lines[i]);
-        for (char& c : head)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        head = media::strutil::lower_ascii(std::move(head));
         if (head.rfind("webvtt", 0) == 0)
             ++i;
     }
@@ -713,8 +707,7 @@ bool read_vtt(const std::filesystem::path& path, std::vector<Cue>& cues, std::st
             break;
         std::string look = trim_copy(lines[i]);
         std::string look_l = look;
-        for (char& c : look_l)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        look_l = media::strutil::lower_ascii(std::move(look_l));
         if (look_l.rfind("note", 0) == 0 || look_l.rfind("style", 0) == 0
             || look_l.rfind("region", 0) == 0) {
             ++i;
@@ -755,8 +748,7 @@ bool read_vtt(const std::filesystem::path& path, std::vector<Cue>& cues, std::st
 bool read_cues_file(const std::filesystem::path& path, std::vector<Cue>& cues, std::string& err)
 {
     std::string ext = path.extension().string();
-    for (char& c : ext)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    ext = media::strutil::lower_ascii(std::move(ext));
     if (ext == ".vtt")
         return read_vtt(path, cues, err);
     if (ext == ".srt")

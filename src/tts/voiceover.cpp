@@ -33,6 +33,7 @@ std::string path_u8(const std::filesystem::path& path)
 #include <ios>
 #include <sstream>
 #include <string>
+#include "string/string_utils.hpp"
 
 namespace pm::tts::voiceover {
 namespace {
@@ -40,12 +41,7 @@ namespace {
 constexpr std::uint64_t k_fnv_off = 1469598103934665603ull;
 constexpr std::uint64_t k_fnv_p   = 1099511628211ull;
 
-std::string lower_ascii(std::string s)
-{
-    for (char& c : s)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
+using media::strutil::lower_ascii;
 
 std::string trim_copy(std::string s)
 {

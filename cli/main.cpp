@@ -25,6 +25,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include "string/string_utils.hpp"
 
 namespace {
 
@@ -314,8 +315,7 @@ int cmd_record_wav(const std::string& dst)
     if (!buffer.write_wav(dst))
         return fail("EIO", "could not write wav", 400);
     std::string ext = std::filesystem::path(dst).extension().string();
-    for (char& ch : ext)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    ext = media::strutil::lower_ascii(std::move(ext));
     const bool aac = pm::audio::record_container_from_extension(ext) == pm::audio::RecordContainer::Aac;
     nlohmann::json body = {
         {"ok", true},

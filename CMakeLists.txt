@@ -26,6 +26,12 @@ endif()
 option(PM_AUDIO_SPEECH_CLIENTS "ElevenLabs HTTP clients and the voice-over timeline" ${_PM_AUDIO_CLIENTS_DEFAULT})
 option(PM_AUDIO_SOUND_TRIGGER "PCM trigger and double-whistle detector" ${_PM_AUDIO_CLIENTS_DEFAULT})
 option(PM_AUDIO_FILTER "File filters: decode, DeepFilterNet, GTCRN flag" ${_PM_AUDIO_CLIENTS_DEFAULT})
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../commons.cpp/cmake/host-layout.cmake")
+  set(_PM_AUDIO_LINK_COMMONS_DEFAULT ON)
+else()
+  set(_PM_AUDIO_LINK_COMMONS_DEFAULT OFF)
+endif()
+option(PM_AUDIO_LINK_COMMONS "Link sibling packages/commons.cpp." ${_PM_AUDIO_LINK_COMMONS_DEFAULT})
 
 # Whisper.cpp and ONNX stay Tanit's. This package does not FetchContent them.
 # A parent that already created `whisper` or `onnxruntime_imported` wins.
@@ -178,6 +184,11 @@ endif()
 
 pm_audio_ensure_miniaudio()
 
+option(PM_AUDIO_HOST_SINGLETONS "Host compiles mixed_capture.cpp once" OFF)
+if(NOT PM_AUDIO_HOST_SINGLETONS)
+  list(APPEND PM_AUDIO_SOURCES src/mixed_capture.cpp)
+endif()
+
 add_library(pm-audio-lib STATIC ${PM_AUDIO_SOURCES})
 target_include_directories(pm-audio-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(pm-audio-lib PUBLIC cxx_std_20)
@@ -264,6 +275,16 @@ if(MSVC)
   target_compile_options(pm-audio-lib PRIVATE /W3 /utf-8 /EHsc)
 else()
   target_compile_options(pm-audio-lib PRIVATE -Wall -Wextra)
+endif()
+
+if(PM_AUDIO_LINK_COMMONS)
+  set(_pm_commons_layout "${CMAKE_CURRENT_SOURCE_DIR}/../commons.cpp/cmake/host-layout.cmake")
+  if(NOT EXISTS "${_pm_commons_layout}")
+    message(FATAL_ERROR "PM_AUDIO_LINK_COMMONS is ON but ${_pm_commons_layout} is missing")
+  endif()
+  include("${_pm_commons_layout}")
+  pm_commons_add_sibling("${CMAKE_CURRENT_BINARY_DIR}/pm-commons-lib")
+  target_link_libraries(pm-audio-lib PUBLIC pm-commons-lib)
 endif()
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)

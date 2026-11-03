@@ -19,16 +19,11 @@
 #include <cstring>
 #include <fstream>
 #include <vector>
+#include "string/string_utils.hpp"
 
 namespace pm::audio::filter {
 namespace {
 
-std::string lower_copy(std::string s)
-{
-    for (char& c : s)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
 
 bool write_s16_wav(const std::filesystem::path& path,
                    const int16_t* samples,
@@ -117,7 +112,7 @@ bool decode_to_48k_mono(const std::filesystem::path& src, std::vector<float>& pc
 Kind parse_kind(std::string_view token)
 {
     std::string s(token);
-    s = lower_copy(std::move(s));
+    s = media::strutil::lower_ascii(std::move(s));
     if (s.empty() || s == "deepfilter" || s == "dfn" || s == "deepfilternet"
         || s == "deepfilternet3")
         return Kind::DeepFilter;

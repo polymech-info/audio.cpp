@@ -74,7 +74,7 @@ Not fetched. Supply them, or leave the feature idle:
 
 A parent build defaults `PM_AUDIO_SPEECH_CLIENTS`, `PM_AUDIO_SOUND_TRIGGER`, and `PM_AUDIO_FILTER` to off, so a small host does not fetch curl or pffft. A standalone build defaults them to on.
 
-`MINIAUDIO_IMPLEMENTATION` belongs in one translation unit of the final binary. The static library only calls `ma_*`. The `pm-audio` executable compiles `src/miniaudio_impl.cpp` for that. A host that already has its own miniaudio implementation should not add a second one.
+`MINIAUDIO_IMPLEMENTATION` belongs in one translation unit of the final binary. The static library only calls `ma_*`. The `pm-audio` executable and the Android `pm_image_jni` library compile `src/miniaudio_impl.cpp`. Desktop already compiles `src/core/audio_devices.cpp` and must not add a second one.
 
 ## Build
 

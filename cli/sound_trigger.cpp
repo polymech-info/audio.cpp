@@ -18,6 +18,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "string/string_utils.hpp"
 
 #if defined(_WIN32)
 #  ifndef NOMINMAX
@@ -225,8 +226,7 @@ bool resolve_profile(const std::string& profile_path, const std::string& builtin
     if (!profile_path.empty())
         return pm::audio::trigger::load_profile(profile_path, profile, error);
     std::string name = builtin;
-    for (char& ch : name)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    name = media::strutil::lower_ascii(std::move(name));
     if (name.empty() || name == "double-whistle") {
         profile = {};
         profile.trigger_id = "double-whistle";
@@ -360,8 +360,7 @@ int cmd_listen(const std::string& profile_path, const std::string& builtin, cons
                const std::string& device, int duration_ms, bool announce)
 {
     std::string which = source;
-    for (char& ch : which)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    which = media::strutil::lower_ascii(std::move(which));
     if (which == "mix")
         return fail("ENOTSUP", "mix capture stays on the host sound-trigger command", 400);
 

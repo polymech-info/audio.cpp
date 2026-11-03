@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <mutex>
 #include <sstream>
+#include "string/string_utils.hpp"
 
 namespace pm::stt {
 namespace {
@@ -23,12 +24,7 @@ WhisperCatalogFn& catalog_fn()
     return fn;
 }
 
-std::string lower_ascii(std::string s)
-{
-    for (char& c : s)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
+using media::strutil::lower_ascii;
 
 std::string trim_ascii(std::string s)
 {

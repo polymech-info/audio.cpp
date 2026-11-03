@@ -15,16 +15,11 @@
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Media.SpeechSynthesis.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include "string/string_utils.hpp"
 
 namespace pm::tts {
 namespace {
 
-std::string lower_copy(std::string s)
-{
-    for (char& ch : s)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    return s;
-}
 
 bool voice_is_sentinel(const std::string& voice)
 {
@@ -62,12 +57,12 @@ winrt::Windows::Media::SpeechSynthesis::VoiceInformation pick_voice(const std::s
     if (voice_is_sentinel(voice))
         return SpeechSynthesizer::DefaultVoice();
 
-    const std::string want = lower_copy(voice);
+    const std::string want = media::strutil::lower_ascii(voice);
     std::string listed;
     for (VoiceInformation const& candidate : SpeechSynthesizer::AllVoices()) {
-        const std::string lang = lower_copy(winrt::to_string(candidate.Language()));
-        const std::string name = lower_copy(winrt::to_string(candidate.DisplayName()));
-        const std::string id = lower_copy(winrt::to_string(candidate.Id()));
+        const std::string lang = media::strutil::lower_ascii(winrt::to_string(candidate.Language()));
+        const std::string name = media::strutil::lower_ascii(winrt::to_string(candidate.DisplayName()));
+        const std::string id = media::strutil::lower_ascii(winrt::to_string(candidate.Id()));
         if (!listed.empty())
             listed += ", ";
         listed += winrt::to_string(candidate.DisplayName());
@@ -85,7 +80,7 @@ bool looks_like_ssml(const std::string& text)
     std::size_t i = 0;
     while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])))
         ++i;
-    const std::string head = lower_copy(text.substr(i, 6));
+    const std::string head = media::strutil::lower_ascii(text.substr(i, 6));
     return head == "<speak";
 }
 
