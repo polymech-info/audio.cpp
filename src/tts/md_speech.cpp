@@ -1,5 +1,6 @@
 #include "pm/audio/tts/text.hpp"
 #include "fs/path_sanitizer.hpp"
+#include "string/string_utils.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -8,7 +9,6 @@
 
 #if defined(PM_AUDIO_HAS_MD4C) && PM_AUDIO_HAS_MD4C
 #include <md4c.h>
-#include "string/string_utils.hpp"
 #endif
 
 namespace pm::tts {

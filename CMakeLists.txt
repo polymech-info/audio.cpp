@@ -160,10 +160,10 @@ if(PM_AUDIO_SOUND_TRIGGER)
     set(PFFFT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(PFFFT_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
     set(PFFFT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    # Full clone: GIT_SHALLOW cannot check out this commit (it is not a branch tip).
     FetchContent_Declare(pm_pffft
       GIT_REPOSITORY https://github.com/marton78/pffft.git
-      GIT_TAG b3344191adc040a0f4c8553a168ab38b3ef04367
-      GIT_SHALLOW TRUE)
+      GIT_TAG b3344191adc040a0f4c8553a168ab38b3ef04367)
     FetchContent_MakeAvailable(pm_pffft)
   endif()
   list(APPEND PM_AUDIO_SOURCES
