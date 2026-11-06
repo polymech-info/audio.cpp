@@ -143,6 +143,7 @@ struct Stream {
     int sample_rate = 48000;
     std::atomic<pm::audio::graph::SpscRing*> pcm{nullptr};
     std::unique_ptr<pm::audio::graph::SpscRing> pcm_store;
+    std::atomic<std::uint64_t> granted_token{0};
 };
 
 Stream& capture_stream()
@@ -167,6 +168,7 @@ void close_locked(Stream& s)
     s.stream = nullptr;
     s.running.store(false);
     s.pcm.store(nullptr, std::memory_order_release);
+    s.granted_token.store(0, std::memory_order_release);
 }
 
 aaudio_data_callback_result_t capture_data(AAudioStream*, void*, void* audioData, int32_t numFrames)
@@ -174,6 +176,11 @@ aaudio_data_callback_result_t capture_data(AAudioStream*, void*, void* audioData
     Stream& s = capture_stream();
     if (s.lost.load(std::memory_order_acquire))
         return AAUDIO_CALLBACK_RESULT_STOP;
+    const std::uint64_t granted = s.granted_token.load(std::memory_order_acquire);
+    if (granted == 0 || granted != lease_token()) {
+        s.lost.store(true, std::memory_order_release);
+        return AAUDIO_CALLBACK_RESULT_STOP;
+    }
     if (numFrames > 0) {
         auto* ring = s.pcm.load(std::memory_order_acquire);
         if (ring && audioData)
@@ -197,6 +204,13 @@ void capture_error(AAudioStream*, void*, aaudio_result_t error)
 aaudio_data_callback_result_t tone_data(AAudioStream*, void*, void* audioData, int32_t numFrames)
 {
     Stream& s = playback_stream();
+    const std::uint64_t granted = s.granted_token.load(std::memory_order_acquire);
+    if (granted == 0 || granted != lease_token()) {
+        s.lost.store(true, std::memory_order_release);
+        s.finished.store(true, std::memory_order_release);
+        s.cv.notify_all();
+        return AAUDIO_CALLBACK_RESULT_STOP;
+    }
     auto* dst = static_cast<std::int16_t*>(audioData);
     const std::int64_t start = s.frames.load(std::memory_order_relaxed);
     for (int32_t i = 0; i < numFrames; ++i) {
@@ -427,6 +441,7 @@ AAudioStatus aaudio_capture_start(std::uint64_t token, int device_id, bool speci
     }
     s.sample_rate = rate;
     s.pcm_store = std::make_unique<pm::audio::graph::SpscRing>(static_cast<std::size_t>(rate) * 60);
+    s.granted_token.store(token, std::memory_order_release);
     s.pcm.store(s.pcm_store.get(), std::memory_order_release);
     const aaudio_result_t started = api().requestStart(opened.stream);
     if (started != AAUDIO_OK) {
@@ -515,6 +530,7 @@ AAudioStatus aaudio_play_tone(std::uint64_t token, int device_id, bool specific,
     s.frames.store(0);
     s.lost.store(false);
     s.finished.store(false);
+    s.granted_token.store(token, std::memory_order_release);
     s.sample_rate = 48000;
     s.target_frames = s.sample_rate * duration_ms / 1000;
 

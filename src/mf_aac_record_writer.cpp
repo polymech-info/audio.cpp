@@ -4,7 +4,7 @@
 
 #include "pm/audio/constants.hpp"
 #include "pm/audio/path.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 
 #ifndef NOMINMAX
 #  define NOMINMAX
@@ -63,7 +63,7 @@ void mf_release() noexcept
 
 std::wstring widen(const std::filesystem::path& path)
 {
-    const std::string utf8 = media::path::path_to_utf8(path);
+    const std::string utf8 = pm::audio::path_to_utf8(path);
     if (utf8.empty()) return {};
     const int n = ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), (int)utf8.size(), nullptr, 0);
     if (n <= 0) return std::wstring(utf8.begin(), utf8.end());

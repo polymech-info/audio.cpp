@@ -1,5 +1,5 @@
 #include "pm/audio/tts/voiceover.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 
 #include "pm/audio/log.hpp"
 
@@ -24,7 +24,7 @@
 #include <ios>
 #include <sstream>
 #include <string>
-#include "string/string_utils.hpp"
+#include "pm/audio/text.hpp"
 
 namespace pm::tts::voiceover {
 namespace {
@@ -32,7 +32,7 @@ namespace {
 constexpr std::uint64_t k_fnv_off = 1469598103934665603ull;
 constexpr std::uint64_t k_fnv_p   = 1099511628211ull;
 
-using media::strutil::lower_ascii;
+using pm::audio::lower_ascii;
 
 std::string trim_copy(std::string s)
 {
@@ -493,7 +493,7 @@ bool load_cues(const std::string& input, std::vector<pm::subs::Cue>& cues, std::
     std::error_code ec;
     const std::filesystem::path path(trimmed);
     if (std::filesystem::is_regular_file(path, ec) && !ec) {
-        std::string ext = media::path::path_to_utf8(path.extension());
+        std::string ext = pm::audio::path_to_utf8(path.extension());
         ext = lower_ascii(ext);
         if (ext == ".json") {
             std::ifstream f(path, std::ios::binary);
@@ -864,12 +864,12 @@ bool render_timeline(const std::vector<pm::subs::Cue>& cues,
         return false;
 
     const auto report_path = dst_wav.parent_path()
-        / (media::path::path_to_utf8(dst_wav.stem()) + ".voiceover.json");
+        / (pm::audio::path_to_utf8(dst_wav.stem()) + ".voiceover.json");
     {
         std::ofstream rf(report_path, std::ios::trunc);
         rf << report_to_json(report).dump(2);
     }
-    pm::audio::log::info("[voiceover] wrote " + media::path::path_to_utf8(dst_wav)
+    pm::audio::log::info("[voiceover] wrote " + pm::audio::path_to_utf8(dst_wav)
                  + " utterances=" + std::to_string(report.utterances)
                  + " natural=" + std::to_string(report.natural)
                  + " used_gap=" + std::to_string(report.used_gap)

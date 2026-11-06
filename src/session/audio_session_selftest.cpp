@@ -1,12 +1,20 @@
 #include "pm/audio/session/audio_session_selftest.hpp"
 
+#include "pm/audio/pcm_record.hpp"
+#include "pm/audio/ring.hpp"
 #include "pm/audio/session/audio_events.hpp"
 #include "pm/audio/session/audio_graph.hpp"
 #include "pm/audio/session/audio_lease.hpp"
 #include "pm/audio/session/audio_route.hpp"
+#include "pm/audio/voice/voice_pipeline.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+#include <memory>
 #include <string>
 #include <thread>
 #include <utility>
@@ -109,6 +117,16 @@ void check_lease(State& st)
     st.expect(!lease_allows_capture(K::ReadAloud) && lease_allows_playback(K::ReadAloud), "read-aloud is playback only");
     st.expect(lease_allows_capture(K::Dictation) && !lease_allows_playback(K::Dictation), "dictation is capture only");
     st.expect(lease_release(ai.token) && lease_holder() == K::None, "owner release clears the holder");
+    st.expect(!lease_release(ai.token), "released token cannot release again");
+
+    const LeaseGrant call = lease_acquire(K::PhoneCall);
+    st.expect(call.ok && call.token != 0 && lease_holder() == K::PhoneCall, "idle call takes the lease");
+    const LeaseGrant during = lease_acquire(K::Dictation);
+    st.expect(!during.ok && std::strcmp(during.reason, "call in progress") == 0, "call blocks a new session");
+    st.expect(lease_release(call.token) && lease_holder() == K::None, "call release clears the holder");
+    st.expect(!lease_release(call.token), "call token cannot release twice");
+    const LeaseGrant lan = lease_acquire(K::LanRemote);
+    st.expect(lan.ok && lan.token == 0 && lease_holder() == K::None, "lan remote still takes no lease");
 }
 
 void check_route(State& st)
@@ -303,6 +321,148 @@ void check_graph(State& st)
     }
     consumer.join();
     st.expect(mismatches.load() == 0 && shared.dropped() == 0, "spsc ring under two threads");
+
+    auto bytes = std::make_unique<pm::audio::AudioRingBuffer>();
+    const uint8_t sample[] = {1, 2, 3, 4, 5};
+    st.expect(bytes->try_push(sample, 5) == 5, "byte ring try_push");
+    uint8_t got_bytes[5] = {};
+    st.expect(bytes->pop(got_bytes, 5) == 5 && got_bytes[0] == 1 && got_bytes[4] == 5, "byte ring pop");
+    st.expect(bytes->try_push(sample, 5) == 5, "byte ring try_push after space opens");
+    bytes->cancel();
+    st.expect(bytes->try_push(sample, 5) == 0, "cancelled byte ring accepts nothing");
+}
+
+bool read_wav_pcm(const std::filesystem::path& path, std::vector<int16_t>& samples, uint16_t& channels)
+{
+    std::ifstream in(path, std::ios::binary);
+    char hdr[44];
+    in.read(hdr, 44);
+    if (in.gcount() != 44)
+        return false;
+    channels = static_cast<uint16_t>(static_cast<unsigned char>(hdr[22])
+        | (static_cast<unsigned char>(hdr[23]) << 8));
+    const uint32_t data_bytes = static_cast<uint32_t>(static_cast<unsigned char>(hdr[40]))
+        | (static_cast<uint32_t>(static_cast<unsigned char>(hdr[41])) << 8)
+        | (static_cast<uint32_t>(static_cast<unsigned char>(hdr[42])) << 16)
+        | (static_cast<uint32_t>(static_cast<unsigned char>(hdr[43])) << 24);
+    if (data_bytes % sizeof(int16_t) != 0)
+        return false;
+    samples.resize(data_bytes / sizeof(int16_t));
+    if (!samples.empty())
+        in.read(reinterpret_cast<char*>(samples.data()), static_cast<std::streamsize>(data_bytes));
+    return static_cast<bool>(in) && in.gcount() == static_cast<std::streamsize>(data_bytes);
+}
+
+void check_record(State& st)
+{
+    st.expect(!pm::audio::pcm_wav_header_fits(0, 48000, 2), "empty wav does not fit");
+    st.expect(pm::audio::pcm_wav_header_fits(100, 48000, 2), "short wav fits");
+    st.expect(!pm::audio::pcm_wav_header_fits(1ull << 31, 48000, 2), "four gigabyte wav does not fit");
+    st.expect(pm::audio::spill_sample_threshold(2, 0x80000000u, 2) == std::numeric_limits<uint32_t>::max(),
+              "spill threshold does not wrap");
+
+    pm::audio::PcmRecordBuffer overflow;
+    overflow.set_format(16000, 2);
+    const int16_t one = 1;
+    overflow.push(&one, (std::numeric_limits<size_t>::max() / 2) + 1);
+    st.expect(overflow.frame_count() == 0, "overflowing push stores nothing");
+    overflow.reserve_seconds(std::numeric_limits<uint32_t>::max());
+
+    std::vector<int16_t> full(pm::audio::PcmRecordBuffer::k_ingress_samples + 8, 4);
+    pm::audio::PcmRecordBuffer bounded;
+    bounded.set_format(16000, 1);
+    bounded.push(full.data(), full.size());
+    st.expect(bounded.dropped_samples() == 8, "ingress drops the tail of a huge push");
+
+    pm::audio::PcmRecordBuffer buffer;
+    buffer.set_format(8000, 1);
+    buffer.set_spill_threshold_seconds(1);
+    std::vector<int16_t> tone(8100, 3);
+    buffer.push(tone.data(), tone.size());
+    st.expect(buffer.sample_rate() == 8000 && buffer.channels() == 1, "format sticks");
+    buffer.set_format(16000, 2);
+    st.expect(buffer.sample_rate() == 8000 && buffer.channels() == 1, "format change during a recording is ignored");
+
+    const auto dir = std::filesystem::temp_directory_path() / "pm-audio-selftest-record";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    const auto good = dir / "clip.wav";
+    const auto again = dir / "again.wav";
+    st.expect(buffer.write_wav(good), "spill wav writes");
+    uint16_t ch = 0;
+    std::vector<int16_t> decoded;
+    st.expect(read_wav_pcm(good, decoded, ch) && ch == 1 && decoded.size() == tone.size() && decoded.front() == 3 && decoded.back() == 3,
+              "spill wav keeps every sample");
+    st.expect(buffer.write_wav(again), "second export still has the spill");
+    std::vector<int16_t> decoded_again;
+    st.expect(read_wav_pcm(again, decoded_again, ch) && decoded_again.size() == tone.size(),
+              "failed-free second export matches");
+
+    const auto blocker = dir / "not-a-directory";
+    {
+        std::ofstream block(blocker, std::ios::binary);
+        block << "x";
+    }
+    st.expect(!buffer.write_wav(blocker / "clip.wav"), "wav export fails when the parent is a file");
+    st.expect(buffer.frame_count() == tone.size(), "failed export keeps the recording");
+    const auto recovered = dir / "recovered.wav";
+    st.expect(buffer.write_wav(recovered), "recording exports after a failed write");
+    std::vector<int16_t> recovered_pcm;
+    st.expect(read_wav_pcm(recovered, recovered_pcm, ch) && recovered_pcm.size() == tone.size(),
+              "recovered wav matches");
+
+    pm::audio::PcmRecordBuffer live;
+    live.set_format(16000, 1);
+    std::vector<int16_t> first(1000, 1);
+    live.push(first.data(), first.size());
+    const auto snap = dir / "snap.wav";
+    const auto later = dir / "later.wav";
+    std::atomic<bool> started{false};
+    std::thread writer([&] {
+        started.store(true);
+        live.write_wav(snap);
+    });
+    while (!started.load())
+        std::this_thread::yield();
+    std::vector<int16_t> extra(1000, 2);
+    live.push(extra.data(), extra.size());
+    writer.join();
+    st.expect(live.write_wav(later), "export after a concurrent push");
+    std::vector<int16_t> snap_pcm;
+    std::vector<int16_t> later_pcm;
+    const bool snap_ok = read_wav_pcm(snap, snap_pcm, ch);
+    const bool later_ok = read_wav_pcm(later, later_pcm, ch);
+    st.expect(snap_ok && (snap_pcm.size() == 1000 || snap_pcm.size() == 2000), "snapshot length is the prefix");
+    st.expect(later_ok && later_pcm.size() == 2000 && later_pcm[0] == 1 && later_pcm.back() == 2,
+              "concurrent push is still in the buffer");
+    std::filesystem::remove_all(dir, ec);
+}
+
+void check_voice(State& st)
+{
+    using pm::audio::voice::PipelineConfig;
+    using pm::audio::voice::VoicePipeline;
+    PipelineConfig bad_cfg;
+    bad_cfg.capture_format.sample_rate = 1000;
+    bad_cfg.capture_format.channels = 1;
+    VoicePipeline bad(bad_cfg, {});
+    std::string error;
+    st.expect(!bad.start_replay(error), "voice rejects a format before joining a worker");
+
+    PipelineConfig cfg;
+    cfg.capture_format.sample_rate = 16000;
+    cfg.capture_format.channels = 1;
+    cfg.callback_queue_ms = 20;
+    VoicePipeline pipeline(cfg, {});
+    st.expect(pipeline.start_replay(error), "voice worker starts");
+    std::vector<int16_t> chunk(8000, 0);
+    st.expect(!pipeline.inject_pcm(chunk.data(), chunk.size()), "oversized callback chunk is refused");
+    const auto stats = pipeline.stats();
+    st.expect(stats.dropped_overflow == chunk.size() && stats.dropped_lock == 0,
+              "overflow is counted apart from lock contention");
+    st.expect(!pipeline.start_replay(error), "a running voice worker refuses a second start");
+    pipeline.stop();
 }
 
 std::string json_escape(std::string_view s)
@@ -345,7 +505,8 @@ std::string report_json(std::string_view suite, const State& st)
 SelfTestReport run_selftest(std::string_view suite)
 {
     SelfTestReport report;
-    if (suite != "all" && suite != "lease" && suite != "route" && suite != "event" && suite != "graph") {
+    if (suite != "all" && suite != "lease" && suite != "route" && suite != "event" && suite != "graph"
+        && suite != "record" && suite != "voice") {
         report.json = "{\"ok\":false,\"function\":\"audio-session\",\"error\":\"unknown suite\"}";
         return report;
     }
@@ -358,6 +519,10 @@ SelfTestReport run_selftest(std::string_view suite)
         check_event(st);
     if (want_suite(suite, "graph"))
         check_graph(st);
+    if (want_suite(suite, "record"))
+        check_record(st);
+    if (want_suite(suite, "voice"))
+        check_voice(st);
     report.ok = st.failures.empty();
     report.json = report_json(suite, st);
     return report;

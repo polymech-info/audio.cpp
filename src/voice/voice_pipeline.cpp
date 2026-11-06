@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <exception>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -144,6 +145,11 @@ struct VoicePipeline::Impl {
 
     std::atomic<uint64_t> callback_frames{0};
     std::atomic<uint64_t> dropped_frames{0};
+    std::atomic<uint64_t> dropped_lock{0};
+    std::atomic<uint64_t> dropped_overflow{0};
+    std::atomic<uint64_t> dropped_busy{0};
+    uint64_t logged_lock = 0;
+    uint64_t logged_overflow = 0;
     std::atomic<uint64_t> completed_utterances{0};
     std::atomic<uint64_t> rejected_utterances{0};
     std::atomic<uint64_t> next_id{1};
@@ -472,6 +478,15 @@ struct VoicePipeline::Impl {
                     finish_requested.store(true, std::memory_order_release);
                 worker_busy.store(copied != 0 || finish, std::memory_order_release);
             }
+            const auto lock_drops = dropped_lock.load(std::memory_order_relaxed);
+            const auto overflow_drops = dropped_overflow.load(std::memory_order_relaxed);
+            if (lock_drops != logged_lock || overflow_drops != logged_overflow) {
+                logged_lock = lock_drops;
+                logged_overflow = overflow_drops;
+                pm::audio::log::debug("[voice] dropped capture frames lock="
+                    + std::to_string(lock_drops)
+                    + " overflow=" + std::to_string(overflow_drops));
+            }
             try {
                 if (copied != 0)
                     consume_pcm(chunk.data(), copied / channels);
@@ -513,14 +528,14 @@ struct VoicePipeline::Impl {
             error = "voice pipeline is already running";
             return false;
         }
-        if (worker.joinable())
-            worker.join();
         if (config.capture_format.sample_rate < 8000 ||
             config.capture_format.channels == 0 ||
             config.capture_format.channels > 2) {
             error = "voice capture format must be 8 kHz or higher with one or two channels";
             return false;
         }
+        if (worker.joinable())
+            worker.join();
         const uint64_t capacity_frames = frames_for_ms(
             config.capture_format.sample_rate, std::max<size_t>(1, config.callback_queue_ms));
         ring.assign(static_cast<size_t>(capacity_frames) * config.capture_format.channels, 0);
@@ -550,16 +565,32 @@ struct VoicePipeline::Impl {
         if (!accepting.load(std::memory_order_acquire) || !pcm || frames == 0)
             return false;
         callback_frames.fetch_add(frames, std::memory_order_relaxed);
-        const size_t count = frames * config.capture_format.channels;
-        std::unique_lock lock(mutex, std::try_to_lock);
-        if (job_active.load(std::memory_order_acquire)) {
+        const size_t channels = config.capture_format.channels;
+        if (channels == 0 || frames > std::numeric_limits<size_t>::max() / channels) {
+            dropped_overflow.fetch_add(frames, std::memory_order_relaxed);
             dropped_frames.fetch_add(frames, std::memory_order_relaxed);
             return false;
         }
-        if (!lock.owns_lock() || count > ring.size() - ring_size) {
-            const auto dropped = dropped_frames.fetch_add(frames, std::memory_order_relaxed) + frames;
-            if (dropped == frames || dropped % 8000 < frames)
-                pm::audio::log::debug("[voice] dropped capture frames total=" + std::to_string(dropped));
+        const size_t count = frames * channels;
+        if (count > ring.size()) {
+            dropped_overflow.fetch_add(frames, std::memory_order_relaxed);
+            dropped_frames.fetch_add(frames, std::memory_order_relaxed);
+            return false;
+        }
+        std::unique_lock lock(mutex, std::try_to_lock);
+        if (job_active.load(std::memory_order_acquire)) {
+            dropped_busy.fetch_add(frames, std::memory_order_relaxed);
+            dropped_frames.fetch_add(frames, std::memory_order_relaxed);
+            return false;
+        }
+        if (!lock.owns_lock()) {
+            dropped_lock.fetch_add(frames, std::memory_order_relaxed);
+            dropped_frames.fetch_add(frames, std::memory_order_relaxed);
+            return false;
+        }
+        if (count > ring.size() - ring_size) {
+            dropped_overflow.fetch_add(frames, std::memory_order_relaxed);
+            dropped_frames.fetch_add(frames, std::memory_order_relaxed);
             return false;
         }
         const size_t write = (ring_read + ring_size) % ring.size();
@@ -752,6 +783,9 @@ PipelineStats VoicePipeline::stats() const noexcept
         impl_->dropped_frames.load(std::memory_order_relaxed),
         impl_->completed_utterances.load(std::memory_order_relaxed),
         impl_->rejected_utterances.load(std::memory_order_relaxed),
+        impl_->dropped_lock.load(std::memory_order_relaxed),
+        impl_->dropped_overflow.load(std::memory_order_relaxed),
+        impl_->dropped_busy.load(std::memory_order_relaxed),
     };
 }
 

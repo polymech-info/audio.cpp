@@ -1,5 +1,5 @@
 #include "pm/audio/stt/whisper.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 
 #include "pm/audio/filter/models.hpp"
 #include "pm/audio/log.hpp"
@@ -8,7 +8,7 @@
 #include <filesystem>
 #include <mutex>
 #include <sstream>
-#include "string/string_utils.hpp"
+#include "pm/audio/text.hpp"
 
 namespace pm::stt {
 namespace {
@@ -25,7 +25,7 @@ WhisperCatalogFn& catalog_fn()
     return fn;
 }
 
-using media::strutil::lower_ascii;
+using pm::audio::lower_ascii;
 
 std::string trim_ascii(std::string s)
 {
@@ -57,7 +57,7 @@ bool file_exists(const std::string& path)
     if (path.empty())
         return false;
     std::error_code ec;
-    return std::filesystem::is_regular_file(media::path::path_from_utf8(path), ec) && !ec;
+    return std::filesystem::is_regular_file(pm::audio::path_from_utf8(path), ec) && !ec;
 }
 
 } // namespace
@@ -83,7 +83,7 @@ WhisperModelProbe whisper_probe_model_path(const std::string& model, const std::
     out.models_dir_override = models_dir;
     out.filename = whisper_canonical_filename(out.model_id);
     if (out.filename.empty())
-        out.filename = media::path::path_to_utf8(media::path::path_from_utf8(out.model_id).filename());
+        out.filename = pm::audio::path_to_utf8(pm::audio::path_from_utf8(out.model_id).filename());
 
     pm::audio::log::trace("[whisper] probe begin model=\"" + out.model_id +
                           "\" filename=" + out.filename +
@@ -91,7 +91,7 @@ WhisperModelProbe whisper_probe_model_path(const std::string& model, const std::
 
     if (file_exists(model)) {
         out.path = model;
-        out.filename = media::path::path_to_utf8(media::path::path_from_utf8(model).filename());
+        out.filename = pm::audio::path_to_utf8(pm::audio::path_from_utf8(model).filename());
         pm::audio::log::trace("[whisper] probe exact path=" + out.path);
         return out;
     }
@@ -116,12 +116,12 @@ WhisperModelProbe whisper_probe_model_path(const std::string& model, const std::
     auto note_dir = [&](const std::filesystem::path& dir) {
         if (dir.empty() || out.filename.empty())
             return;
-        out.probed.push_back(media::path::path_to_utf8(dir / out.filename));
+        out.probed.push_back(pm::audio::path_to_utf8(dir / out.filename));
     };
     auto try_dir = [&](const std::filesystem::path& dir) -> bool {
         if (dir.empty() || out.filename.empty())
             return false;
-        const std::string cand = media::path::path_to_utf8(dir / out.filename);
+        const std::string cand = pm::audio::path_to_utf8(dir / out.filename);
         if (file_exists(cand)) {
             out.path = cand;
             return true;
@@ -131,7 +131,7 @@ WhisperModelProbe whisper_probe_model_path(const std::string& model, const std::
 
     std::vector<std::filesystem::path> roots;
     if (!models_dir.empty())
-        roots.emplace_back(media::path::path_from_utf8(models_dir));
+        roots.emplace_back(pm::audio::path_from_utf8(models_dir));
     for (const auto& root : pm::audio::filter::model_search_roots())
         roots.push_back(root);
 

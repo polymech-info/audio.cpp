@@ -1,5 +1,5 @@
 #include "pm/audio/tts/elevenlabs_tts.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 #include "pm/audio/tts/elevenlabs_voice_change.hpp"
 #include "pm/audio/constants.hpp"
 
@@ -18,7 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include "string/string_utils.hpp"
+#include "pm/audio/text.hpp"
 
 namespace C = pm::audio::constants;
 
@@ -173,7 +173,7 @@ static size_t curl_header_stream(char* buffer, size_t size, size_t nitems, void*
     constexpr size_t k_prefix_len = 11; // "request-id:"
     if (total > k_prefix_len) {
         std::string prefix(buffer, k_prefix_len);
-        prefix = media::strutil::lower_ascii(std::move(prefix));
+        prefix = pm::audio::lower_ascii(std::move(prefix));
         if (prefix == "request-id:") {
             std::string value(buffer + k_prefix_len, total - k_prefix_len);
             const auto b = value.find_first_not_of(" \t\r\n");
@@ -207,7 +207,7 @@ size_t curl_capture_request_id(char* buffer, size_t size, size_t nitems, void* u
     constexpr size_t k_prefix_len = 11; // "request-id:"
     if (total > k_prefix_len) {
         std::string prefix(buffer, k_prefix_len);
-        prefix = media::strutil::lower_ascii(std::move(prefix));
+        prefix = pm::audio::lower_ascii(std::move(prefix));
         if (prefix == "request-id:") {
             std::string value(buffer + k_prefix_len, total - k_prefix_len);
             const auto b = value.find_first_not_of(" \t\r\n");
@@ -445,8 +445,8 @@ std::vector<uint8_t> elevenlabs_voice_change(
     try {
         curl_mimepart* audio_part = curl_mime_addpart(mime);
         if (!audio_part || curl_mime_name(audio_part, "audio") != CURLE_OK
-            || curl_mime_filedata(audio_part, media::path::path_to_utf8(source_path).c_str()) != CURLE_OK
-            || curl_mime_filename(audio_part, media::path::path_to_utf8(source_path.filename()).c_str()) != CURLE_OK
+            || curl_mime_filedata(audio_part, pm::audio::path_to_utf8(source_path).c_str()) != CURLE_OK
+            || curl_mime_filename(audio_part, pm::audio::path_to_utf8(source_path.filename()).c_str()) != CURLE_OK
             || curl_mime_type(audio_part, "application/octet-stream") != CURLE_OK)
             throw std::runtime_error(
                 "elevenlabs_voice_change: could not add source audio to multipart body");

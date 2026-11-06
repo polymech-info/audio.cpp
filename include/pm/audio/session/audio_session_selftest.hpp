@@ -10,7 +10,7 @@ struct SelfTestReport {
     std::string json;
 };
 
-// suite: all, lease, route, event, graph. Unknown suite returns ok=false.
+// suite: all, lease, route, event, graph, record, or voice. Unknown suite returns ok=false.
 SelfTestReport run_selftest(std::string_view suite);
 
 } // namespace pm::audio::session

@@ -1,5 +1,5 @@
 #include "pm/audio/subs/subtitle_writer.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -9,7 +9,7 @@
 #include <initializer_list>
 #include <sstream>
 #include <system_error>
-#include "string/string_utils.hpp"
+#include "pm/audio/text.hpp"
 
 namespace pm::subs {
 namespace {
@@ -132,12 +132,12 @@ bool write_utf8_file(const std::filesystem::path& path,
 {
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     if (!f) {
-        err = "could not write " + media::path::path_to_utf8(path);
+        err = "could not write " + pm::audio::path_to_utf8(path);
         return false;
     }
     f.write(body.data(), static_cast<std::streamsize>(body.size()));
     if (!f) {
-        err = "write failed: " + media::path::path_to_utf8(path);
+        err = "write failed: " + pm::audio::path_to_utf8(path);
         return false;
     }
     return true;
@@ -432,7 +432,7 @@ bool write_format(Format fmt,
 
 std::vector<Format> parse_format_list(std::string token)
 {
-    token = media::strutil::lower_ascii(std::move(token));
+    token = pm::audio::lower_ascii(std::move(token));
     if (token.empty() || token == "off" || token == "none" || token == "false")
         return {};
     if (token == "all")
@@ -460,8 +460,8 @@ namespace {
 
 bool stem_ext_is(const std::filesystem::path& stem, std::initializer_list<const char*> exts)
 {
-    std::string e = media::path::path_to_utf8(stem.extension());
-    e = media::strutil::lower_ascii(std::move(e));
+    std::string e = pm::audio::path_to_utf8(stem.extension());
+    e = pm::audio::lower_ascii(std::move(e));
     for (const char* x : exts) {
         if (e == x)
             return true;
@@ -697,7 +697,7 @@ bool read_vtt(const std::filesystem::path& path, std::vector<Cue>& cues, std::st
     size_t i = 0;
     if (i < lines.size()) {
         std::string head = trim_copy(lines[i]);
-        head = media::strutil::lower_ascii(std::move(head));
+        head = pm::audio::lower_ascii(std::move(head));
         if (head.rfind("webvtt", 0) == 0)
             ++i;
     }
@@ -708,7 +708,7 @@ bool read_vtt(const std::filesystem::path& path, std::vector<Cue>& cues, std::st
             break;
         std::string look = trim_copy(lines[i]);
         std::string look_l = look;
-        look_l = media::strutil::lower_ascii(std::move(look_l));
+        look_l = pm::audio::lower_ascii(std::move(look_l));
         if (look_l.rfind("note", 0) == 0 || look_l.rfind("style", 0) == 0
             || look_l.rfind("region", 0) == 0) {
             ++i;
@@ -748,8 +748,8 @@ bool read_vtt(const std::filesystem::path& path, std::vector<Cue>& cues, std::st
 
 bool read_cues_file(const std::filesystem::path& path, std::vector<Cue>& cues, std::string& err)
 {
-    std::string ext = media::path::path_to_utf8(path.extension());
-    ext = media::strutil::lower_ascii(std::move(ext));
+    std::string ext = pm::audio::path_to_utf8(path.extension());
+    ext = pm::audio::lower_ascii(std::move(ext));
     if (ext == ".vtt")
         return read_vtt(path, cues, err);
     if (ext == ".srt")

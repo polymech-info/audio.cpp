@@ -1,5 +1,5 @@
 #include "pm/audio/tts/text.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 
 #include "pm/audio/constants.hpp"
 
@@ -69,7 +69,7 @@ bool load_text_file(const std::filesystem::path& path,
         check = path_check_fn();
         probe = binary_probe_fn();
     }
-    if (check && !check(media::path::path_to_utf8(path), err)) {
+    if (check && !check(pm::audio::path_to_utf8(path), err)) {
         if (err.empty())
             err = "invalid path";
         return false;
@@ -77,12 +77,12 @@ bool load_text_file(const std::filesystem::path& path,
 
     std::error_code ec;
     if (!std::filesystem::is_regular_file(path, ec) || ec) {
-        err = "not a readable file: " + media::path::path_to_utf8(path);
+        err = "not a readable file: " + pm::audio::path_to_utf8(path);
         return false;
     }
     const auto file_size = std::filesystem::file_size(path, ec);
     if (ec) {
-        err = "could not stat file: " + media::path::path_to_utf8(path);
+        err = "could not stat file: " + pm::audio::path_to_utf8(path);
         return false;
     }
     if (file_size > pm::audio::constants::k_tts_text_file_max_bytes) {
@@ -101,14 +101,14 @@ bool load_text_file(const std::filesystem::path& path,
 
     std::ifstream in(path, std::ios::binary);
     if (!in) {
-        err = "could not open file: " + media::path::path_to_utf8(path);
+        err = "could not open file: " + pm::audio::path_to_utf8(path);
         return false;
     }
     out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     strip_utf8_bom(out);
 
     if (probe && !looks_like_plaintext(out)) {
-        err = "file appears to be binary (NUL bytes in sample): " + media::path::path_to_utf8(path);
+        err = "file appears to be binary (NUL bytes in sample): " + pm::audio::path_to_utf8(path);
         return false;
     }
 
@@ -183,7 +183,7 @@ bool resolve_tts_text(const std::string& text_or_path,
         if (!load_text_file(path, out.text, out.preparser_id, err))
             return false;
         out.from_file = true;
-        out.source_path = media::path::path_to_utf8(path);
+        out.source_path = pm::audio::path_to_utf8(path);
         return true;
     }
 

@@ -1,5 +1,5 @@
 #include "pm/audio/stt/whisper.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 #include "pm/audio/stt/wav.hpp"
 #include "pm/audio/log.hpp"
 
@@ -908,7 +908,7 @@ WhisperTranscript whisper_local_transcribe_pcm_detailed(
                      + " gpu=" + std::string(opts.use_gpu ? "1" : "0")
                      + " pcm=" + std::to_string(n_samples)
                      + " segments=" + std::to_string(out.segments.size())
-                     + " model=" + media::path::path_to_utf8(media::path::path_from_utf8(model_path).filename()));
+                     + " model=" + pm::audio::path_to_utf8(pm::audio::path_from_utf8(model_path).filename()));
     }
     return out;
 }
@@ -926,11 +926,11 @@ void whisper_local_preload(const std::string& model_path,
             && cached_gpu == opts.use_gpu
             && cached_device == opts.gpu_device) {
             pm::audio::log::debug("[whisper] preload reuse model="
-                         + media::path::path_to_utf8(media::path::path_from_utf8(model_path).filename())
+                         + pm::audio::path_to_utf8(pm::audio::path_from_utf8(model_path).filename())
                          + " gpu=" + std::string(opts.use_gpu ? "1" : "0"));
         } else {
             pm::audio::log::debug("[whisper] preload load model="
-                         + media::path::path_to_utf8(media::path::path_from_utf8(model_path).filename())
+                         + pm::audio::path_to_utf8(pm::audio::path_from_utf8(model_path).filename())
                          + " gpu=" + std::string(opts.use_gpu ? "1" : "0"));
         }
 #if !defined(PM_AUDIO_LINK_WHISPER)
@@ -1039,7 +1039,7 @@ nlohmann::json whisper_loaded_models_json()
     nlohmann::json row{
         {"key", "whisper:stt"},
         {"kind", "whisper-stt"},
-        {"name", path.empty() ? "whisper" : media::path::path_to_utf8(media::path::path_from_utf8(path).filename())},
+        {"name", path.empty() ? "whisper" : pm::audio::path_to_utf8(pm::audio::path_from_utf8(path).filename())},
         {"path", path},
         {"status", active_calls > 0 ? "busy" : "loaded"},
         {"provider", "whisper"},

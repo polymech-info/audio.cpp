@@ -40,11 +40,19 @@ const char* lease_action_name(LeaseAction action) noexcept;
 bool occupies_audio_lease(SessionKind kind) noexcept;
 
 // holder is the session that currently owns the audio lease (None if idle).
-// PhoneCall is an external holder: the phone app, not one of our sessions.
+// PhoneCall occupies that lease until the host releases it. It does not open
+// our capture or playback device.
 LeaseDecision preempt(SessionKind holder, SessionKind incoming) noexcept;
 
 // Process-wide owner. preempt() is the policy; these functions apply it.
 // A capture or playback backend must refuse to start without a live token.
+// Acquiring a lease replaces the holder immediately and bumps the token. The
+// previous holder observes lease_token() != its grant and stops. That is the
+// handoff: there is no second acknowledgement channel. AAudio capture stops
+// its callback when the token changes. Desktop capture is owned by the host,
+// which must stop the device on the same check.
+// An idle phone call takes the lease so a later session cannot open the mic.
+// LanRemote still does not.
 struct LeaseGrant {
     bool ok = false;
     LeaseAction action = LeaseAction::Deny;
@@ -54,8 +62,8 @@ struct LeaseGrant {
 };
 
 LeaseGrant lease_acquire(SessionKind incoming);
-// False when the token is not the current grant. True when it matched, including
-// a second release of that same token.
+// False when the token is not the current grant. A successful release bumps the
+// token, so the same value cannot release a second time.
 bool lease_release(std::uint64_t token);
 void lease_force_clear() noexcept;
 SessionKind lease_holder() noexcept;

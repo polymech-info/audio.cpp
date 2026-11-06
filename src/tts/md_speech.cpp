@@ -1,6 +1,6 @@
 #include "pm/audio/tts/text.hpp"
-#include "fs/path_sanitizer.hpp"
-#include "string/string_utils.hpp"
+#include "pm/audio/text.hpp"
+#include "pm/audio/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -56,8 +56,8 @@ void collapse_ws_for_speech(std::string& s)
 
 bool ext_is_markdown(const std::filesystem::path& path)
 {
-    std::string ext = media::path::path_to_utf8(path.extension());
-    ext = media::strutil::lower_ascii(std::move(ext));
+    std::string ext = pm::audio::path_to_utf8(path.extension());
+    ext = pm::audio::lower_ascii(std::move(ext));
     return ext == ".md" || ext == ".markdown" || ext == ".mdx";
 }
 

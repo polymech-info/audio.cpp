@@ -1,5 +1,5 @@
 #include "pm/audio/stt/wav.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -44,7 +44,7 @@ static_assert(sizeof(WavHdr) == 44, "WavHdr must be 44 bytes");
 
 WavPcm read_wav(const std::string& path)
 {
-    std::ifstream f(media::path::path_from_utf8(path), std::ios::binary);
+    std::ifstream f(pm::audio::path_from_utf8(path), std::ios::binary);
     if (!f)
         throw std::runtime_error("whisper_local: cannot open WAV: " + path);
     std::vector<std::uint8_t> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
@@ -137,7 +137,7 @@ bool write_pcm_wav(const std::string& path,
                    std::size_t n_samples,
                    int sample_rate)
 {
-    std::ofstream f(media::path::path_from_utf8(path), std::ios::binary | std::ios::trunc);
+    std::ofstream f(pm::audio::path_from_utf8(path), std::ios::binary | std::ios::trunc);
     if (!f)
         return false;
     const std::uint32_t data_bytes = static_cast<std::uint32_t>(n_samples * sizeof(short));

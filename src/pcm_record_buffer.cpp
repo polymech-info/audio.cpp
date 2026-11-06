@@ -1,10 +1,11 @@
 #include "pm/audio/pcm_record.hpp"
-#include "fs/path_sanitizer.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <fstream>
+#include <utility>
+#include <vector>
 
 namespace pm::audio {
 namespace {
@@ -29,6 +30,7 @@ struct WavHeader {
 static_assert(sizeof(WavHeader) == 44, "WavHeader must be exactly 44 bytes");
 
 constexpr float kInt16FullScale = 32768.0f;
+constexpr size_t k_reserve_cap_samples = 256ull * 1024ull * 1024ull;
 
 float samples_to_dbfs(float normalized_peak)
 {
@@ -41,28 +43,33 @@ std::filesystem::path make_spill_path()
     namespace fs = std::filesystem;
     std::error_code ec;
     fs::path base = fs::temp_directory_path(ec);
-    if (ec) base = media::path::path_from_utf8(".");
+    if (ec) base = ".";
     const auto tag = std::chrono::steady_clock::now().time_since_epoch().count();
     return base / ("pm-pcm-spill-" + std::to_string(tag) + ".raw");
 }
 
-} // namespace
-
-RecordContainer record_container_from_extension(const std::string& ext_lower)
+uint32_t saturate_u32(uint64_t value)
 {
-    if (ext_lower == ".m4a" || ext_lower == ".aac" || ext_lower == ".mp4")
-        return RecordContainer::Aac;
-    return RecordContainer::Wav;
+    if (value > std::numeric_limits<uint32_t>::max())
+        return std::numeric_limits<uint32_t>::max();
+    return static_cast<uint32_t>(value);
 }
 
-bool aac_record_supported() noexcept
+bool write_all(std::ostream& out, const char* data, uint64_t bytes)
 {
-#if defined(_WIN32)
+    constexpr uint64_t k_chunk = 1024ull * 1024ull;
+    uint64_t done = 0;
+    while (done < bytes) {
+        const uint64_t n = std::min(k_chunk, bytes - done);
+        out.write(data + done, static_cast<std::streamsize>(n));
+        if (!out)
+            return false;
+        done += n;
+    }
     return true;
-#else
-    return false;
-#endif
 }
+
+} // namespace
 
 void accumulate_pcm_levels(PcmLevelStats& stats, const int16_t* samples, size_t sample_count)
 {
@@ -102,9 +109,51 @@ PcmLevelStats analyze_pcm_levels(const int16_t* samples, size_t sample_count)
     return stats;
 }
 
+RecordContainer record_container_from_extension(const std::string& ext_lower)
+{
+    if (ext_lower == ".m4a" || ext_lower == ".aac" || ext_lower == ".mp4")
+        return RecordContainer::Aac;
+    return RecordContainer::Wav;
+}
+
+bool aac_record_supported() noexcept
+{
+#if defined(_WIN32)
+    return true;
+#else
+    return false;
+#endif
+}
+
+PcmRecordBuffer::PcmRecordBuffer()
+    : ingress_(k_ingress_samples)
+{
+    worker_ = std::thread([this] { worker_main(); });
+}
+
+PcmRecordBuffer::~PcmRecordBuffer()
+{
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        stop_ = true;
+        flush_requested_ = false;
+    }
+    cv_.notify_all();
+    if (worker_.joinable())
+        worker_.join();
+    remove_spill_file();
+}
+
+uint64_t PcmRecordBuffer::stored_samples_locked() const noexcept
+{
+    return spilled_samples_ + samples_.size() + ingress_size_;
+}
+
 void PcmRecordBuffer::set_format(uint32_t sample_rate, uint16_t channels)
 {
     std::lock_guard<std::mutex> lk(mu_);
+    if (busy_ || ingress_size_ != 0 || spilled_samples_ != 0 || !samples_.empty())
+        return;
     sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
     channels_    = channels > 0 ? channels : 2;
 }
@@ -112,54 +161,195 @@ void PcmRecordBuffer::set_format(uint32_t sample_rate, uint16_t channels)
 void PcmRecordBuffer::set_spill_threshold_seconds(uint32_t seconds)
 {
     std::lock_guard<std::mutex> lk(mu_);
-    if (seconds == 0 || channels_ == 0 || sample_rate_ == 0) {
-        spill_threshold_samples_ = 0;
-        return;
-    }
-    spill_threshold_samples_ =
-        seconds * sample_rate_ * static_cast<uint32_t>(channels_);
+    spill_threshold_samples_ = spill_sample_threshold(seconds, sample_rate_, channels_);
 }
 
 void PcmRecordBuffer::reserve_seconds(uint32_t seconds)
 {
     if (seconds == 0) return;
     std::lock_guard<std::mutex> lk(mu_);
-    const size_t frames = static_cast<size_t>(sample_rate_) * seconds;
-    samples_.reserve(frames * channels_);
+    if (sample_rate_ == 0 || channels_ == 0) return;
+    if (static_cast<uint64_t>(seconds) > std::numeric_limits<size_t>::max() / sample_rate_)
+        return;
+    const size_t frames = static_cast<size_t>(sample_rate_) * static_cast<size_t>(seconds);
+    if (frames > std::numeric_limits<size_t>::max() / channels_)
+        return;
+    const size_t n = frames * static_cast<size_t>(channels_);
+    if (n > k_reserve_cap_samples || n > samples_.max_size())
+        return;
+    samples_.reserve(n);
 }
 
 void PcmRecordBuffer::push(const int16_t* pcm, size_t frame_count)
 {
-    if (!pcm || frame_count == 0 || channels_ == 0) return;
-    const size_t sample_count = frame_count * static_cast<size_t>(channels_);
-    std::lock_guard<std::mutex> lk(mu_);
-    accumulate_pcm_levels(level_stats_, pcm, sample_count);
-    samples_.insert(samples_.end(), pcm, pcm + sample_count);
-    maybe_spill_locked();
+    if (!pcm || frame_count == 0) return;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (channels_ == 0) return;
+        if (frame_count > std::numeric_limits<size_t>::max() / channels_) {
+            dropped_samples_ += frame_count;
+            return;
+        }
+        size_t left = frame_count * static_cast<size_t>(channels_);
+        const int16_t* src = pcm;
+        while (left > 0) {
+            if (ingress_size_ == ingress_.size()) {
+                dropped_samples_ += left;
+                break;
+            }
+            const size_t space = ingress_.size() - ingress_size_;
+            const size_t n = std::min(left, space);
+            for (size_t i = 0; i < n; ++i) {
+                ingress_[ingress_w_] = src[i];
+                ingress_w_ = (ingress_w_ + 1) % ingress_.size();
+            }
+            ingress_size_ += n;
+            src += n;
+            left -= n;
+        }
+    }
+    cv_.notify_one();
 }
 
-bool PcmRecordBuffer::ensure_spill_open_locked()
+uint32_t PcmRecordBuffer::sample_rate() const noexcept
 {
-    if (spill_stream_.is_open()) return true;
+    std::lock_guard<std::mutex> lk(mu_);
+    return sample_rate_;
+}
+
+uint16_t PcmRecordBuffer::channels() const noexcept
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    return channels_;
+}
+
+uint32_t PcmRecordBuffer::frame_count() const noexcept
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    if (channels_ == 0) return 0;
+    return saturate_u32(stored_samples_locked() / channels_);
+}
+
+uint32_t PcmRecordBuffer::data_bytes() const noexcept
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    const uint64_t samples = stored_samples_locked();
+    if (samples > std::numeric_limits<uint64_t>::max() / sizeof(int16_t))
+        return std::numeric_limits<uint32_t>::max();
+    return saturate_u32(samples * sizeof(int16_t));
+}
+
+uint64_t PcmRecordBuffer::dropped_samples() const noexcept
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    return dropped_samples_;
+}
+
+bool PcmRecordBuffer::using_spill() const noexcept
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    return spilled_samples_ > 0 || spill_stream_.is_open();
+}
+
+void PcmRecordBuffer::clear()
+{
+    std::unique_lock<std::mutex> lk(mu_);
+    drain_locked(lk);
+    samples_.clear();
+    spilled_samples_ = 0;
+    dropped_samples_ = 0;
+    level_stats_ = {};
+    exporting_ = false;
+    remove_spill_file();
+}
+
+PcmLevelStats PcmRecordBuffer::analyze_levels() const
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    return level_stats_;
+}
+
+void PcmRecordBuffer::drain_locked(std::unique_lock<std::mutex>& lk) const
+{
+    flush_requested_ = true;
+    cv_.notify_all();
+    idle_cv_.wait(lk, [&] { return ingress_size_ == 0 && !busy_; });
+    exporting_ = true;
+    flush_requested_ = false;
+    cv_.notify_all();
+}
+
+bool PcmRecordBuffer::write_spill_block(const std::vector<int16_t>& block)
+{
+    if (block.empty()) return true;
     if (spill_path_.empty())
         spill_path_ = make_spill_path();
-    spill_stream_.open(spill_path_, std::ios::binary | std::ios::app);
-    return spill_stream_.good();
+    if (!spill_stream_.is_open()) {
+        spill_stream_.open(spill_path_, std::ios::binary | std::ios::app);
+        if (!spill_stream_)
+            return false;
+    }
+    const uint64_t bytes = static_cast<uint64_t>(block.size()) * sizeof(int16_t);
+    return write_all(spill_stream_, reinterpret_cast<const char*>(block.data()), bytes);
 }
 
-void PcmRecordBuffer::maybe_spill_locked()
+void PcmRecordBuffer::worker_main()
 {
-    if (spill_threshold_samples_ == 0 ||
-        samples_.size() < spill_threshold_samples_)
-        return;
-    if (!ensure_spill_open_locked()) return;
+    std::unique_lock<std::mutex> lk(mu_);
+    while (true) {
+        cv_.wait(lk, [&] { return stop_ || ingress_size_ > 0 || flush_requested_; });
+        if (ingress_size_ == 0) {
+            busy_ = false;
+            idle_cv_.notify_all();
+            if (stop_)
+                break;
+            cv_.wait(lk, [&] { return stop_ || ingress_size_ > 0 || !flush_requested_; });
+            continue;
+        }
 
-    const auto bytes = static_cast<std::streamsize>(samples_.size() * sizeof(int16_t));
-    spill_stream_.write(reinterpret_cast<const char*>(samples_.data()), bytes);
-    if (!spill_stream_.good()) return;
+        std::vector<int16_t> chunk(ingress_size_);
+        for (size_t i = 0; i < chunk.size(); ++i) {
+            chunk[i] = ingress_[ingress_r_];
+            ingress_r_ = (ingress_r_ + 1) % ingress_.size();
+        }
+        ingress_size_ = 0;
+        busy_ = true;
 
-    spilled_samples_ += samples_.size();
-    samples_.clear();
+        try {
+            accumulate_pcm_levels(level_stats_, chunk.data(), chunk.size());
+            samples_.insert(samples_.end(), chunk.begin(), chunk.end());
+        } catch (...) {
+            busy_ = false;
+            idle_cv_.notify_all();
+            continue;
+        }
+
+        if (exporting_ || spill_threshold_samples_ == 0 ||
+            samples_.size() < spill_threshold_samples_) {
+            busy_ = false;
+            idle_cv_.notify_all();
+            continue;
+        }
+
+        std::vector<int16_t> block = std::move(samples_);
+        samples_.clear();
+        lk.unlock();
+        bool wrote = false;
+        try {
+            wrote = write_spill_block(block);
+        } catch (...) {
+            wrote = false;
+        }
+        lk.lock();
+        if (wrote)
+            spilled_samples_ += block.size();
+        else {
+            block.insert(block.end(), samples_.begin(), samples_.end());
+            samples_ = std::move(block);
+        }
+        busy_ = false;
+        idle_cv_.notify_all();
+    }
 }
 
 void PcmRecordBuffer::close_spill_locked() const noexcept
@@ -177,109 +367,106 @@ void PcmRecordBuffer::remove_spill_file() noexcept
     std::error_code ec;
     std::filesystem::remove(spill_path_, ec);
     spill_path_.clear();
-}
-
-uint32_t PcmRecordBuffer::frame_count() const noexcept
-{
-    std::lock_guard<std::mutex> lk(mu_);
-    if (channels_ == 0) return 0;
-    const uint64_t total_samples = spilled_samples_ + samples_.size();
-    return static_cast<uint32_t>(total_samples / channels_);
-}
-
-uint32_t PcmRecordBuffer::data_bytes() const noexcept
-{
-    std::lock_guard<std::mutex> lk(mu_);
-    const uint64_t total_samples = spilled_samples_ + samples_.size();
-    return static_cast<uint32_t>(total_samples * sizeof(int16_t));
-}
-
-bool PcmRecordBuffer::using_spill() const noexcept
-{
-    std::lock_guard<std::mutex> lk(mu_);
-    return spilled_samples_ > 0 || spill_stream_.is_open();
-}
-
-void PcmRecordBuffer::clear()
-{
-    std::lock_guard<std::mutex> lk(mu_);
-    samples_.clear();
     spilled_samples_ = 0;
-    level_stats_     = {};
-    remove_spill_file();
-}
-
-PcmLevelStats PcmRecordBuffer::analyze_levels() const
-{
-    std::lock_guard<std::mutex> lk(mu_);
-    return level_stats_;
 }
 
 bool PcmRecordBuffer::write_wav(const std::filesystem::path& dst) const
 {
     std::vector<int16_t> tail;
     uint32_t rate = 0;
-    uint16_t ch   = 0;
+    uint16_t ch = 0;
     uint64_t spilled = 0;
-    std::filesystem::path spill_copy;
+    std::filesystem::path spill;
     {
-        std::lock_guard<std::mutex> lk(mu_);
-        tail     = samples_;
-        rate     = sample_rate_;
-        ch       = channels_;
-        spilled  = spilled_samples_;
-        spill_copy = spill_path_;
+        std::unique_lock<std::mutex> lk(mu_);
+        drain_locked(lk);
         close_spill_locked();
+        tail = samples_;
+        rate = sample_rate_;
+        ch = channels_;
+        spilled = spilled_samples_;
+        spill = spill_path_;
     }
 
-    if (ch == 0 || rate == 0) return false;
+    auto finish = [&](bool) {
+        std::lock_guard<std::mutex> lk(mu_);
+        exporting_ = false;
+        cv_.notify_all();
+    };
 
+    if (ch == 0 || rate == 0) {
+        finish(false);
+        return false;
+    }
     const uint64_t total_samples = spilled + tail.size();
-    if (total_samples == 0) return false;
+    if (!pcm_wav_header_fits(total_samples, rate, ch)) {
+        finish(false);
+        return false;
+    }
 
     std::error_code ec;
     if (dst.has_parent_path())
         std::filesystem::create_directories(dst.parent_path(), ec);
 
     std::ofstream out(dst, std::ios::binary | std::ios::trunc);
-    if (!out) return false;
+    if (!out) {
+        finish(false);
+        return false;
+    }
 
-    const uint32_t data_bytes =
-        static_cast<uint32_t>(total_samples * sizeof(int16_t));
+    const uint32_t data_bytes = static_cast<uint32_t>(total_samples * sizeof(int16_t));
     WavHeader hdr{};
-    hdr.channels        = ch;
-    hdr.sample_rate     = rate;
-    hdr.byte_rate       = rate * ch * (hdr.bits_per_sample / 8u);
-    hdr.block_align     = static_cast<uint16_t>(ch * (hdr.bits_per_sample / 8u));
-    hdr.data_size       = data_bytes;
-    hdr.chunk_size      = data_bytes + 36;
+    hdr.channels = ch;
+    hdr.sample_rate = rate;
+    hdr.byte_rate = static_cast<uint32_t>(static_cast<uint64_t>(rate) * ch * 2u);
+    hdr.block_align = static_cast<uint16_t>(ch * 2u);
+    hdr.data_size = data_bytes;
+    hdr.chunk_size = data_bytes + 36;
+    if (!write_all(out, reinterpret_cast<const char*>(&hdr), sizeof(hdr))) {
+        finish(false);
+        return false;
+    }
 
-    out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
-
-    if (spilled > 0 && !spill_copy.empty()) {
-        std::ifstream spill_in(spill_copy, std::ios::binary);
-        if (!spill_in) return false;
+    if (spilled > 0) {
+        if (spill.empty()) {
+            finish(false);
+            return false;
+        }
+        std::ifstream spill_in(spill, std::ios::binary);
+        if (!spill_in) {
+            finish(false);
+            return false;
+        }
+        const uint64_t want = spilled * sizeof(int16_t);
+        uint64_t got_bytes = 0;
         std::vector<char> chunk(256 * 1024);
-        while (spill_in) {
-            spill_in.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+        while (got_bytes < want) {
+            const uint64_t ask = std::min<uint64_t>(chunk.size(), want - got_bytes);
+            spill_in.read(chunk.data(), static_cast<std::streamsize>(ask));
             const auto got = spill_in.gcount();
-            if (got > 0)
-                out.write(chunk.data(), got);
+            if (got <= 0) {
+                finish(false);
+                return false;
+            }
+            if (!write_all(out, chunk.data(), static_cast<uint64_t>(got))) {
+                finish(false);
+                return false;
+            }
+            got_bytes += static_cast<uint64_t>(got);
         }
     }
 
     if (!tail.empty()) {
-        out.write(reinterpret_cast<const char*>(tail.data()),
-                  static_cast<std::streamsize>(tail.size() * sizeof(int16_t)));
+        const uint64_t bytes = static_cast<uint64_t>(tail.size()) * sizeof(int16_t);
+        if (!write_all(out, reinterpret_cast<const char*>(tail.data()), bytes)) {
+            finish(false);
+            return false;
+        }
     }
 
     out.flush();
-    const bool ok = out.good();
-
-    if (!spill_copy.empty()) {
-        std::error_code rm_ec;
-        std::filesystem::remove(spill_copy, rm_ec);
-    }
+    const bool ok = static_cast<bool>(out);
+    finish(ok);
     return ok;
 }
 

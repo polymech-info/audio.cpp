@@ -18,7 +18,7 @@
 #include <mutex>
 #include <unordered_set>
 #include <vector>
-#include "string/string_utils.hpp"
+#include "pm/audio/text.hpp"
 
 namespace pm::audio {
 namespace {
@@ -76,7 +76,7 @@ void capture_cancel_remove(MixedAudioCapture* c)
     v.erase(std::remove(v.begin(), v.end(), c), v.end());
 }
 
-using media::strutil::lower_ascii;
+using pm::audio::lower_ascii;
 bool icontains(const std::string& hay, const std::string& needle)
 {
     if (needle.empty()) return true;

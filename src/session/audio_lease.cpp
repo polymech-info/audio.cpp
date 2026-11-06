@@ -119,9 +119,9 @@ LeaseGrant lease_acquire(SessionKind incoming)
     grant.holder = g_holder;
     if (decision.action == LeaseAction::Deny)
         return grant;
-    // LAN remote and an idle phone-call notice do not take the microphone.
-    const bool takes_lease = incoming != SessionKind::LanRemote
-        && !(incoming == SessionKind::PhoneCall && g_holder == SessionKind::None);
+    // LAN remote never opens the microphone. A phone call does, including when
+    // the lease was idle: the holder becomes PhoneCall until the host releases it.
+    const bool takes_lease = incoming != SessionKind::LanRemote;
     if (!takes_lease) {
         grant.ok = true;
         grant.token = 0;
@@ -141,6 +141,7 @@ bool lease_release(std::uint64_t token)
     if (token == 0 || token != g_token)
         return false;
     g_holder = SessionKind::None;
+    g_token += 1;
     return true;
 }
 

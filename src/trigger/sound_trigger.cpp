@@ -1,5 +1,5 @@
 #include "pm/audio/trigger/sound_trigger.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 
 #include "pm/audio/trigger/sound_trigger_whistle.hpp"
 
@@ -556,7 +556,7 @@ bool read_wav_mono16(const std::filesystem::path& path, WavData& out,
     }
     std::ifstream in(path, std::ios::binary);
     if (!in) {
-        error = "cannot open WAV: " + media::path::path_to_utf8(path);
+        error = "cannot open WAV: " + pm::audio::path_to_utf8(path);
         return false;
     }
     unsigned char header[12]{};
@@ -841,10 +841,10 @@ bool save_profile(const Profile& profile, const std::filesystem::path& path,
     if (!validate_profile(profile, error))
         return false;
     const std::uint64_t hash = feature_hash(profile.templates);
-    const std::string feature_name = media::path::path_to_utf8(path.filename()) + "."
+    const std::string feature_name = pm::audio::path_to_utf8(path.filename()) + "."
         + hex_hash(hash) + ".features.bin";
     const auto feature_path = path.parent_path() / feature_name;
-    const auto feature_temp = media::path::path_to_utf8(feature_path) + ".tmp";
+    const auto feature_temp = pm::audio::path_to_utf8(feature_path) + ".tmp";
     std::error_code ec;
     if (!path.parent_path().empty())
         std::filesystem::create_directories(path.parent_path(), ec);
@@ -901,7 +901,7 @@ bool save_profile(const Profile& profile, const std::filesystem::path& path,
         {"feature_hash", hex_hash(hash)},
         {"template_count", profile.templates.size()},
     };
-    const auto temp = media::path::path_to_utf8(path) + ".tmp";
+    const auto temp = pm::audio::path_to_utf8(path) + ".tmp";
     {
         std::ofstream out(temp, std::ios::binary | std::ios::trunc);
         if (!out) {
@@ -916,7 +916,7 @@ bool save_profile(const Profile& profile, const std::filesystem::path& path,
     }
     std::filesystem::rename(temp, path, ec);
     if (ec && std::filesystem::exists(path)) {
-        const auto backup = media::path::path_to_utf8(path) + ".bak";
+        const auto backup = pm::audio::path_to_utf8(path) + ".bak";
         std::error_code backup_error;
         std::filesystem::remove(backup, backup_error);
         backup_error.clear();
@@ -990,7 +990,7 @@ bool load_profile(const std::filesystem::path& path, Profile& profile,
         const std::string feature_name =
             j.value("feature_file", std::string{});
         if (!feature_name.empty()) {
-            if (media::path::path_from_utf8(feature_name).filename() != feature_name) {
+            if (pm::audio::path_from_utf8(feature_name).filename() != feature_name) {
                 error = "invalid sound-trigger feature filename";
                 return false;
             }

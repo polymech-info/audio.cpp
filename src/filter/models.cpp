@@ -1,7 +1,7 @@
 #include "pm/audio/filter/models.hpp"
 
 #include "pm/audio/path.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 
 #include <cstdlib>
 #include <mutex>
@@ -147,20 +147,20 @@ ModelProbe probe_deepfilter_model(const std::string& hint)
 
     auto note = [&](const std::filesystem::path& path) {
         if (!path.empty())
-            out.probed.push_back(media::path::path_to_utf8(path));
+            out.probed.push_back(pm::audio::path_to_utf8(path));
     };
     auto take_file = [&](const std::filesystem::path& path) {
         note(path);
         if (!is_file(path))
             return false;
-        out.path = media::path::path_to_utf8(path);
+        out.path = pm::audio::path_to_utf8(path);
         return true;
     };
     auto take_dir = [&](const std::filesystem::path& path) {
         note(path);
         if (!unpacked_deepfilter(path))
             return false;
-        out.path = media::path::path_to_utf8(path);
+        out.path = pm::audio::path_to_utf8(path);
         return true;
     };
 
@@ -175,8 +175,8 @@ ModelProbe probe_deepfilter_model(const std::string& hint)
         out.probed.push_back(hint);
     }
 
-    const std::filesystem::path hint_name = hint.empty() ? std::filesystem::path{} : media::path::path_from_utf8(hint).filename();
-    const bool hint_is_leaf = !hint.empty() && hint_name == media::path::path_from_utf8(hint);
+    const std::filesystem::path hint_name = hint.empty() ? std::filesystem::path{} : pm::audio::path_from_utf8(hint).filename();
+    const bool hint_is_leaf = !hint.empty() && hint_name == pm::audio::path_from_utf8(hint);
     for (const auto& root : collect_model_roots()) {
         if (hint_is_leaf && take_file(root / hint_name))
             return out;
@@ -212,23 +212,23 @@ ModelProbe probe_gtcrn_model(const std::string& hint)
     out.filename = "gtcrn_simple.onnx";
     auto note = [&](const std::filesystem::path& path) {
         if (!path.empty())
-            out.probed.push_back(media::path::path_to_utf8(path));
+            out.probed.push_back(pm::audio::path_to_utf8(path));
     };
     auto take = [&](const std::filesystem::path& path) {
         note(path);
         if (!is_file(path))
             return false;
-        out.path = media::path::path_to_utf8(path);
+        out.path = pm::audio::path_to_utf8(path);
         return true;
     };
-    if (!hint.empty() && is_file(media::path::path_from_utf8(hint))) {
+    if (!hint.empty() && is_file(pm::audio::path_from_utf8(hint))) {
         out.path = hint;
         return out;
     }
     if (!hint.empty())
         out.probed.push_back(hint);
-    const std::filesystem::path hint_name = hint.empty() ? std::filesystem::path{} : media::path::path_from_utf8(hint).filename();
-    const bool hint_is_leaf = !hint.empty() && hint_name == media::path::path_from_utf8(hint);
+    const std::filesystem::path hint_name = hint.empty() ? std::filesystem::path{} : pm::audio::path_from_utf8(hint).filename();
+    const bool hint_is_leaf = !hint.empty() && hint_name == pm::audio::path_from_utf8(hint);
     for (const auto& root : collect_model_roots()) {
         if (hint_is_leaf && take(root / hint_name))
             return out;

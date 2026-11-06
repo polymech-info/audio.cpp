@@ -4,12 +4,12 @@
 
 #include <algorithm>
 #include <cctype>
-#include "string/string_utils.hpp"
+#include "pm/audio/text.hpp"
 
 namespace pm::audio {
 namespace {
 
-using media::strutil::lower_ascii;
+using pm::audio::lower_ascii;
 
 } // namespace
 

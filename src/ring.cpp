@@ -8,6 +8,28 @@
 
 namespace pm::audio {
 
+size_t AudioRingBuffer::try_push(const void* src, size_t len) noexcept
+{
+    if (!src || len == 0 || cancelled.load(std::memory_order_acquire))
+        return 0;
+    const size_t space = k_cap - readable();
+    const size_t chunk = std::min(len, space);
+    if (chunk == 0)
+        return 0;
+    const auto* p = static_cast<const uint8_t*>(src);
+    const size_t wp = wpos.load(std::memory_order_relaxed) % k_cap;
+    const size_t tail = k_cap - wp;
+    if (chunk <= tail) {
+        std::memcpy(buf + wp, p, chunk);
+    } else {
+        std::memcpy(buf + wp, p, tail);
+        std::memcpy(buf, p + tail, chunk - tail);
+    }
+    wpos.fetch_add(chunk, std::memory_order_release);
+    cv.notify_all();
+    return chunk;
+}
+
 bool AudioRingBuffer::push(const void* src, size_t len)
 {
     const auto* p = static_cast<const uint8_t*>(src);

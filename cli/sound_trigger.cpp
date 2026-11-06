@@ -1,5 +1,5 @@
 #include "sound_trigger.hpp"
-#include "fs/path_sanitizer.hpp"
+#include "pm/audio/text.hpp"
 
 #include "pm/audio/devices.hpp"
 #include "pm/audio/trigger/sound_trigger.hpp"
@@ -19,7 +19,7 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include "string/string_utils.hpp"
+#include "pm/audio/text.hpp"
 
 #if defined(_WIN32)
 #  ifndef NOMINMAX
@@ -198,7 +198,7 @@ bool write_inspect_plot(const std::filesystem::path& path,
     svg << "</svg>\n";
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) {
-        error = "cannot write plot: " + media::path::path_to_utf8(path);
+        error = "cannot write plot: " + pm::audio::path_to_utf8(path);
         return false;
     }
     out << svg.str();
@@ -227,7 +227,7 @@ bool resolve_profile(const std::string& profile_path, const std::string& builtin
     if (!profile_path.empty())
         return pm::audio::trigger::load_profile(profile_path, profile, error);
     std::string name = builtin;
-    name = media::strutil::lower_ascii(std::move(name));
+    name = pm::audio::lower_ascii(std::move(name));
     if (name.empty() || name == "double-whistle") {
         profile = {};
         profile.trigger_id = "double-whistle";
@@ -361,7 +361,7 @@ int cmd_listen(const std::string& profile_path, const std::string& builtin, cons
                const std::string& device, int duration_ms, bool announce)
 {
     std::string which = source;
-    which = media::strutil::lower_ascii(std::move(which));
+    which = pm::audio::lower_ascii(std::move(which));
     if (which == "mix")
         return fail("ENOTSUP", "mix capture stays on the host sound-trigger command", 400);
 

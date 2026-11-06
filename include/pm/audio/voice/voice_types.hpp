@@ -122,6 +122,11 @@ struct PipelineStats {
     uint64_t dropped_frames = 0;
     uint64_t completed_utterances = 0;
     uint64_t rejected_utterances = 0;
+    // Subsets of dropped_frames. lock is try_lock failure. overflow is a full
+    // queue or a chunk larger than the queue. busy is a transcription in flight.
+    uint64_t dropped_lock = 0;
+    uint64_t dropped_overflow = 0;
+    uint64_t dropped_busy = 0;
 };
 
 const char* control_intent_name(ControlIntent value) noexcept;
