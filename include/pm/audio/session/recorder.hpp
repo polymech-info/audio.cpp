@@ -5,6 +5,7 @@
 // With those off, the file is 48 kHz. The capture callback only copies.
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -45,5 +46,11 @@ RecorderStatus recorder_start(const RecorderRequest& request);
 RecorderStatus recorder_set(bool gtcrn, bool aec, bool agc);
 RecorderStatus recorder_stop();
 RecorderStatus recorder_stats();
+
+// Copies the take to 16 kHz mono for a cloud live transcript. The file rate
+// stays as started. Off drops the queue. The worker is still the only ring reader.
+void recorder_tap(bool on);
+// Drains queued 16 kHz frames. 0 when the tap is off or empty.
+std::size_t recorder_pull_pcm(std::int16_t* dst, std::size_t max_samples);
 
 } // namespace pm::audio::session

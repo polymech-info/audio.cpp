@@ -181,6 +181,9 @@ struct Engine {
     std::atomic<bool> want_gtcrn{false};
     std::atomic<bool> want_aec{false};
     std::atomic<bool> want_agc{false};
+    std::atomic<bool> tap_on{false};
+    std::mutex tap_mu;
+    std::vector<std::int16_t> tap_pcm;
     std::thread worker;
     std::uint64_t token = 0;
     std::string model;
@@ -196,6 +199,38 @@ struct Engine {
     {
         std::lock_guard<std::mutex> lock(mu);
         status = next;
+    }
+
+    void tap_push(const std::int16_t* pcm, std::size_t n)
+    {
+        if (!pcm || n == 0 || !tap_on.load(std::memory_order_relaxed))
+            return;
+        constexpr std::size_t cap = 16000 * 3;
+        std::lock_guard<std::mutex> lock(tap_mu);
+        if (tap_pcm.size() + n > cap) {
+            const std::size_t drop = tap_pcm.size() + n - cap;
+            tap_pcm.erase(tap_pcm.begin(), tap_pcm.begin() + static_cast<std::ptrdiff_t>(drop));
+        }
+        tap_pcm.insert(tap_pcm.end(), pcm, pcm + n);
+    }
+
+    std::size_t tap_pull(std::int16_t* dst, std::size_t max)
+    {
+        if (!dst || max == 0)
+            return 0;
+        std::lock_guard<std::mutex> lock(tap_mu);
+        const std::size_t n = std::min(max, tap_pcm.size());
+        if (n == 0)
+            return 0;
+        std::memcpy(dst, tap_pcm.data(), n * sizeof(std::int16_t));
+        tap_pcm.erase(tap_pcm.begin(), tap_pcm.begin() + static_cast<std::ptrdiff_t>(n));
+        return n;
+    }
+
+    void tap_clear()
+    {
+        std::lock_guard<std::mutex> lock(tap_mu);
+        tap_pcm.clear();
     }
 
     void run(int opened_rate, int file_rate)
@@ -231,6 +266,9 @@ struct Engine {
         std::vector<std::int16_t> raw(chunk);
         std::vector<std::int16_t> pcm16;
         std::vector<std::int16_t> enhanced;
+        std::vector<std::int16_t> tap_down;
+        ToRate tap_rate;
+        bool tap_live = false;
 
         local.ok = true;
         local.running = true;
@@ -317,6 +355,21 @@ struct Engine {
                 measure(write_pcm, write_n, local.rms, local.peak, local.bands);
                 wav.write(write_pcm, write_n);
                 local.frames_written += static_cast<std::int64_t>(write_n);
+                if (tap_on.load(std::memory_order_relaxed)) {
+                    if (!tap_live) {
+                        tap_rate.reset(file_rate, k_speech_rate);
+                        tap_live = true;
+                    }
+                    if (file_rate == k_speech_rate) {
+                        tap_push(write_pcm, write_n);
+                    } else {
+                        tap_down.clear();
+                        tap_rate.push(write_pcm, write_n, tap_down);
+                        tap_push(tap_down.data(), tap_down.size());
+                    }
+                } else {
+                    tap_live = false;
+                }
             }
             const auto cap = aaudio_capture_status();
             local.dropped = cap.dropped;
@@ -444,6 +497,19 @@ RecorderStatus recorder_stop()
 RecorderStatus recorder_stats()
 {
     return engine().copy();
+}
+
+void recorder_tap(bool on)
+{
+    Engine& eng = engine();
+    eng.tap_on.store(on);
+    if (!on)
+        eng.tap_clear();
+}
+
+std::size_t recorder_pull_pcm(std::int16_t* dst, std::size_t max_samples)
+{
+    return engine().tap_pull(dst, max_samples);
 }
 
 } // namespace pm::audio::session
