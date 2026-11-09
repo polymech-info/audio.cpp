@@ -30,7 +30,9 @@ bool aaudio_available();
 
 // specific=false leaves the device unspecified. specific=true must open that id
 // or fail without leaving a stream running. preset is "recognition" or "communication".
-AAudioStatus aaudio_capture_start(std::uint64_t token, int device_id, bool specific, const char* preset);
+// sample_rate is a request; the opened stream rate may differ. 0 uses 16 kHz.
+AAudioStatus aaudio_capture_start(std::uint64_t token, int device_id, bool specific, const char* preset,
+                                   int sample_rate = 16000);
 
 AAudioStatus aaudio_capture_stop();
 // Stop capture and write the kept PCM as a 16-bit mono WAV. Empty path only stops.

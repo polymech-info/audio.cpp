@@ -13,7 +13,7 @@ AAudioStatus aaudio_unavailable()
     return status;
 }
 
-AAudioStatus aaudio_capture_start(std::uint64_t, int, bool, const char*) { return aaudio_unavailable(); }
+AAudioStatus aaudio_capture_start(std::uint64_t, int, bool, const char*, int) { return aaudio_unavailable(); }
 AAudioStatus aaudio_capture_stop() { return aaudio_unavailable(); }
 AAudioStatus aaudio_capture_stop_wav(const std::string&) { return aaudio_unavailable(); }
 AAudioStatus aaudio_capture_status() { return aaudio_unavailable(); }
@@ -404,7 +404,8 @@ bool aaudio_available()
     return load_api();
 }
 
-AAudioStatus aaudio_capture_start(std::uint64_t token, int device_id, bool specific, const char* preset)
+AAudioStatus aaudio_capture_start(std::uint64_t token, int device_id, bool specific, const char* preset,
+                                   int sample_rate)
 {
     if (!load_api())
         return fail("AAudio requires Android 8");
@@ -429,11 +430,12 @@ AAudioStatus aaudio_capture_start(std::uint64_t token, int device_id, bool speci
     s.error_code.store(0, std::memory_order_release);
     s.finished.store(false);
 
+    const int requested = sample_rate >= 8000 && sample_rate <= 96000 ? sample_rate : 16000;
     Opened opened = open_stream(AAUDIO_DIRECTION_INPUT, device_id, specific, input, true,
-                                capture_data, capture_error, &s, 16000);
+                                capture_data, capture_error, &s, requested);
     if (!opened.stream)
         return fail(opened.error);
-    int rate = 16000;
+    int rate = requested;
     if (api().getSampleRate) {
         const int32_t got = api().getSampleRate(opened.stream);
         if (got >= 8000 && got <= 96000)

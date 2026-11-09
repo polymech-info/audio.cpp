@@ -1,7 +1,8 @@
 #pragma once
 
-// Phone recorder. One worker reads the AAudio ring, resamples to 16 kHz,
-// optionally runs GTCRN, and writes a WAV. The capture callback only copies.
+// Phone recorder. One worker reads the AAudio ring and writes a WAV.
+// Noise remover, echo removal, and volume leveling save at 16 kHz.
+// With those off, the file is 48 kHz. The capture callback only copies.
 
 #include <array>
 #include <cstdint>

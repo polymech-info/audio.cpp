@@ -1,6 +1,7 @@
 #include "pm/audio/session/recorder.hpp"
 
 #include "pm/audio/echo.hpp"
+#include "pm/audio/log.hpp"
 #include "pm/audio/session/aaudio_capture.hpp"
 #include "pm/audio/session/audio_lease.hpp"
 
@@ -22,19 +23,21 @@
 namespace pm::audio::session {
 namespace {
 
-constexpr int k_file_rate = 16000;
-constexpr std::size_t k_read = 1600;
+constexpr int k_speech_rate = 16000;
+constexpr int k_hq_rate = 48000;
 
-struct To16k {
-    int rate = k_file_rate;
+struct ToRate {
+    int source = k_speech_rate;
+    int target = k_speech_rate;
     std::int16_t prev = 0;
     bool has = false;
     double next = 0;
     std::int64_t seen = 0;
 
-    void reset(int opened)
+    void reset(int opened, int file_rate)
     {
-        rate = opened > 0 ? opened : k_file_rate;
+        target = file_rate > 0 ? file_rate : k_speech_rate;
+        source = opened > 0 ? opened : target;
         prev = 0;
         has = false;
         next = 0;
@@ -45,12 +48,12 @@ struct To16k {
     {
         if (!in || n == 0)
             return;
-        if (rate == k_file_rate) {
+        if (source == target) {
             out.insert(out.end(), in, in + n);
             seen += static_cast<std::int64_t>(n);
             return;
         }
-        const double step = static_cast<double>(rate) / static_cast<double>(k_file_rate);
+        const double step = static_cast<double>(source) / static_cast<double>(target);
         for (std::size_t i = 0; i < n; ++i) {
             const std::int16_t cur = in[i];
             while (next < static_cast<double>(seen) + 1.0) {
@@ -78,9 +81,11 @@ struct To16k {
 struct WavOut {
     std::ofstream file;
     std::uint32_t frames = 0;
+    int rate = k_speech_rate;
 
-    bool open(const std::string& path)
+    bool open(const std::string& path, int sample_rate)
     {
+        rate = sample_rate > 0 ? sample_rate : k_speech_rate;
         file.open(path, std::ios::binary | std::ios::trunc);
         if (!file)
             return false;
@@ -112,8 +117,8 @@ struct WavOut {
         put(hdr + 16, 16);
         hdr[20] = 1; hdr[21] = 0;
         hdr[22] = 1; hdr[23] = 0;
-        put(hdr + 24, static_cast<std::uint32_t>(k_file_rate));
-        put(hdr + 28, static_cast<std::uint32_t>(k_file_rate) * 2u);
+        put(hdr + 24, static_cast<std::uint32_t>(rate));
+        put(hdr + 28, static_cast<std::uint32_t>(rate) * 2u);
         hdr[32] = 2; hdr[33] = 0;
         hdr[34] = 16; hdr[35] = 0;
         hdr[36] = 'd'; hdr[37] = 'a'; hdr[38] = 't'; hdr[39] = 'a';
@@ -193,10 +198,10 @@ struct Engine {
         status = next;
     }
 
-    void run(int opened_rate)
+    void run(int opened_rate, int file_rate)
     {
-        To16k resample;
-        resample.reset(opened_rate);
+        ToRate resample;
+        resample.reset(opened_rate, file_rate);
         WavOut wav;
         RecorderStatus local = copy();
         std::string path;
@@ -204,7 +209,7 @@ struct Engine {
             std::lock_guard<std::mutex> lock(mu);
             path = path_;
         }
-        if (!wav.open(path)) {
+        if (!wav.open(path, file_rate)) {
             local.ok = false;
             local.running = false;
             local.reason = "couldn't write the recording";
@@ -218,21 +223,23 @@ struct Engine {
         std::string gtcrn_err;
         bool gtcrn_open = false;
 #else
-        std::string gtcrn_err = "GTCRN needs ONNX Runtime in this build";
+        std::string gtcrn_err = "Noise remover isn't in this build";
         bool gtcrn_open = false;
 #endif
         std::unique_ptr<pm::audio::EchoCancellationProcessor> apm;
-        std::vector<std::int16_t> raw(k_read);
+        const std::size_t chunk = static_cast<std::size_t>(std::max(160, opened_rate / 10));
+        std::vector<std::int16_t> raw(chunk);
         std::vector<std::int16_t> pcm16;
         std::vector<std::int16_t> enhanced;
 
         local.ok = true;
         local.running = true;
         local.opened_rate = opened_rate;
-        local.file_rate = k_file_rate;
-        local.reason = opened_rate == k_file_rate
-            ? "Mic and file are 16 kHz"
-            : "Mic opened at " + std::to_string(opened_rate) + " Hz. The file is 16 kHz.";
+        local.file_rate = file_rate;
+        local.reason = opened_rate == file_rate
+            ? "Mic and file are " + std::to_string(file_rate) + " Hz"
+            : "Mic opened at " + std::to_string(opened_rate) + " Hz. The file is "
+                + std::to_string(file_rate) + " Hz.";
         publish(local);
 
         while (!stop.load(std::memory_order_relaxed)) {
@@ -256,9 +263,10 @@ struct Engine {
             const bool agc = want_agc.load(std::memory_order_relaxed);
             local.aec_requested = aec;
             local.agc_requested = agc;
-            if ((aec || agc) && !apm) {
+            const bool speech_rate = file_rate == k_speech_rate;
+            if ((aec || agc) && speech_rate && !apm) {
                 pm::audio::EchoCancellationProcessor::Config cfg;
-                cfg.sample_rate_hz = k_file_rate;
+                cfg.sample_rate_hz = k_speech_rate;
                 cfg.channels = 1;
                 cfg.agc = agc;
                 cfg.ns = false;
@@ -266,8 +274,8 @@ struct Engine {
             }
             local.aec_active = apm && apm->active();
             if ((aec || agc) && !local.aec_active)
-                local.filter_note = "WebRTC APM is not linked. Echo cancellation and gain stay off.";
-            else if (local.filter_note.find("WebRTC") != std::string::npos)
+                local.filter_note = "Echo removal and volume leveling aren't available on this phone.";
+            else if (local.filter_note.find("Echo removal") != std::string::npos)
                 local.filter_note.clear();
             if (local.aec_active && (aec || agc))
                 apm->process_capture(pcm16.data(), pcm16.size());
@@ -277,13 +285,16 @@ struct Engine {
             local.gtcrn_requested = want_gtcrn.load(std::memory_order_relaxed);
             local.last_process_ns = 0;
 #if defined(PM_AUDIO_HAS_ONNX) && PM_AUDIO_HAS_ONNX
-            if (local.gtcrn_requested && !gtcrn_open && gtcrn_err.empty()) {
+            if (local.gtcrn_requested && speech_rate && !gtcrn_open && gtcrn_err.empty()) {
                 std::string err;
                 gtcrn_open = gtcrn.open(model, err);
-                if (!gtcrn_open)
-                    gtcrn_err = err.empty() ? "GTCRN model did not open" : err;
+                if (!gtcrn_open) {
+                    if (!err.empty())
+                        pm::audio::log::warn(std::string("[recorder] noise remover: ") + err);
+                    gtcrn_err = "Noise remover didn't start";
+                }
             }
-            if (local.gtcrn_requested && gtcrn_open) {
+            if (local.gtcrn_requested && speech_rate && gtcrn_open) {
                 enhanced.clear();
                 const auto t0 = std::chrono::steady_clock::now();
                 gtcrn.process(pcm16.data(), pcm16.size(), enhanced);
@@ -294,10 +305,12 @@ struct Engine {
                 write_n = enhanced.size();
             }
 #endif
-            local.gtcrn_active = local.gtcrn_requested && gtcrn_open;
-            if (local.gtcrn_requested && !gtcrn_open)
+            local.gtcrn_active = local.gtcrn_requested && speech_rate && gtcrn_open;
+            if (!speech_rate && (local.gtcrn_requested || aec || agc))
+                local.filter_note = "These filters save at 16 kHz. They apply to the next take.";
+            else if (local.gtcrn_requested && !gtcrn_open)
                 local.filter_note = gtcrn_err;
-            else if (local.gtcrn_active && local.filter_note.find("GTCRN") != std::string::npos)
+            else if (local.gtcrn_active && local.filter_note.find("Noise remover") != std::string::npos)
                 local.filter_note.clear();
 
             if (write_n > 0) {
@@ -318,7 +331,7 @@ struct Engine {
         aaudio_capture_stop();
         local.running = false;
         local.ok = local.reason != "couldn't write the recording";
-        if (local.reason == "Mic and file are 16 kHz"
+        if (local.reason.rfind("Mic and file are ", 0) == 0
             || local.reason.rfind("Mic opened at ", 0) == 0)
             local.reason = "saved";
         publish(local);
@@ -362,8 +375,10 @@ RecorderStatus recorder_start(const RecorderRequest& request)
         return denied;
     }
 
+    const bool speech = request.gtcrn || request.aec || request.agc;
+    const int file_rate = speech ? k_speech_rate : k_hq_rate;
     const AAudioStatus opened = aaudio_capture_start(
-        request.token, -1, false, "recognition");
+        request.token, -1, false, "recognition", file_rate);
     if (!opened.ok) {
         RecorderStatus denied;
         denied.reason = opened.reason.empty() ? "capture did not start" : opened.reason;
@@ -384,14 +399,14 @@ RecorderStatus recorder_start(const RecorderRequest& request)
         starting.running = true;
         starting.reason = "opened";
         starting.opened_rate = opened.sample_rate;
-        starting.file_rate = k_file_rate;
+        starting.file_rate = file_rate;
         starting.gtcrn_requested = request.gtcrn;
         starting.aec_requested = request.aec;
         starting.agc_requested = request.agc;
         eng.publish(starting);
     }
-    const int rate = opened.sample_rate > 0 ? opened.sample_rate : k_file_rate;
-    eng.worker = std::thread([&eng, rate] { eng.run(rate); });
+    const int rate = opened.sample_rate > 0 ? opened.sample_rate : file_rate;
+    eng.worker = std::thread([&eng, rate, file_rate] { eng.run(rate, file_rate); });
     return eng.copy();
 }
 

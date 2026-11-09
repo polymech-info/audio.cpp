@@ -23,6 +23,8 @@ struct WhisperLocalOptions {
     int n_threads = 0;
     bool use_gpu = true;
     int gpu_device = 0;
+    /// Word-level DTW. Segment text and segment times stay available when this is off.
+    bool word_timestamps = true;
     WhisperFlashAttention flash_attn = WhisperFlashAttention::Auto;
 };
 

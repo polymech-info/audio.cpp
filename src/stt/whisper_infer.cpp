@@ -549,6 +549,7 @@ struct HostCachedCtx {
     bool use_gpu = false;
     int gpu_device = 0;
     WhisperFlashAttention flash = WhisperFlashAttention::Auto;
+    bool word_timestamps = true;
     whisper_context* ctx = nullptr;
 
     void reset_locked()
@@ -574,7 +575,8 @@ whisper_context* host_load_ctx_locked(const std::string& model_path,
     const bool want_gpu = options.use_gpu
         && !g_whisper_gpu_unavailable.load(std::memory_order_relaxed);
     if (cache.ctx && cache.path == model_path && cache.use_gpu == want_gpu &&
-        cache.gpu_device == options.gpu_device && cache.flash == options.flash_attn)
+        cache.gpu_device == options.gpu_device && cache.flash == options.flash_attn &&
+        cache.word_timestamps == options.word_timestamps)
         return cache.ctx;
 
     cache.reset_locked();
@@ -585,9 +587,9 @@ whisper_context* host_load_ctx_locked(const std::string& model_path,
     cparams.gpu_device = options.gpu_device;
     // whisper.cpp turns DTW off when flash attention is on.
     cparams.flash_attn = false;
-    cparams.dtw_token_timestamps = true;
+    cparams.dtw_token_timestamps = options.word_timestamps;
     cparams.dtw_aheads_preset = WHISPER_AHEADS_LARGE_V3_TURBO;
-    {
+    if (options.word_timestamps) {
         std::string name = model_path;
         for (char& c : name) {
             if (c >= 'A' && c <= 'Z')
@@ -621,7 +623,8 @@ whisper_context* host_load_ctx_locked(const std::string& model_path,
         else if (has("tiny"))
             cparams.dtw_aheads_preset = WHISPER_AHEADS_TINY;
     }
-    pm::audio::log::info("[whisper] dtw=1 flash=0 preset="
+    pm::audio::log::info("[whisper] dtw=" + std::string(options.word_timestamps ? "1" : "0")
+                 + " flash=0 preset="
                  + std::to_string(static_cast<int>(cparams.dtw_aheads_preset)));
 
     if (want_gpu) {
@@ -634,6 +637,7 @@ whisper_context* host_load_ctx_locked(const std::string& model_path,
             cache.use_gpu = true;
             cache.gpu_device = options.gpu_device;
             cache.flash = options.flash_attn;
+            cache.word_timestamps = options.word_timestamps;
             return ctx;
         }
         note_whisper_gpu_fallback("whisper_init_from_file_with_params");
@@ -650,6 +654,7 @@ whisper_context* host_load_ctx_locked(const std::string& model_path,
     cache.use_gpu = false;
     cache.gpu_device = options.gpu_device;
     cache.flash = options.flash_attn;
+    cache.word_timestamps = options.word_timestamps;
     return ctx;
 }
 
@@ -818,7 +823,7 @@ WhisperTranscript whisper_local_transcribe_pcm_detailed(
         // pause into one cue that stays up until the next phrase.
         wparams.single_segment   = false;
         wparams.no_context       = n <= kWhisperRate * 6u;
-        wparams.token_timestamps = true;
+        wparams.token_timestamps = opts.word_timestamps;
         wparams.print_progress   = false;
         wparams.print_realtime   = false;
         wparams.print_timestamps = false;
@@ -852,12 +857,13 @@ WhisperTranscript whisper_local_transcribe_pcm_detailed(
             s.text = seg;
             s.t0_cs = whisper_full_get_segment_t0(ctx, i);
             s.t1_cs = whisper_full_get_segment_t1(ctx, i);
-            fill_whisper_words(ctx, i, s);
+            if (opts.word_timestamps)
+                fill_whisper_words(ctx, i, s);
             finish_whisper_segment(s);
             t.text += s.text;
             t.segments.push_back(std::move(s));
         }
-        t.dtw = true;
+        t.dtw = opts.word_timestamps;
         t.text = trim(t.text);
         if (t.text == "[BLANK_AUDIO]" || t.text == "[NO SPEECH]"
             || t.text == "[no speech]") {
