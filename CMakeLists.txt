@@ -74,6 +74,7 @@ set(PM_AUDIO_SOURCES
   src/voice/voice_match.cpp
   src/voice/voice_envelope.cpp
   src/session/aaudio_capture.cpp
+  src/session/recorder.cpp
   src/path.cpp
   src/capture.cpp
   src/dynlib.cpp

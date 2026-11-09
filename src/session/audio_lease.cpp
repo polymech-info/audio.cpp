@@ -28,6 +28,7 @@ const char* session_kind_name(SessionKind kind) noexcept
     case SessionKind::GroupVoice:      return "group";
     case SessionKind::LanRemote:       return "lan_remote";
     case SessionKind::PhoneCall:       return "phone_call";
+    case SessionKind::Recorder:        return "recorder";
     }
     return "none";
 }
@@ -43,6 +44,7 @@ SessionKind parse_session_kind(std::string_view token) noexcept
     if (token == "group")            return SessionKind::GroupVoice;
     if (token == "lan_remote")       return SessionKind::LanRemote;
     if (token == "phone_call")       return SessionKind::PhoneCall;
+    if (token == "recorder")         return SessionKind::Recorder;
     return SessionKind::None;
 }
 
@@ -97,6 +99,10 @@ LeaseDecision preempt(SessionKind holder, SessionKind incoming) noexcept
     // Starting an AI conversation replaces dictation. The reverse does not.
     if (holder == SessionKind::Dictation && incoming == SessionKind::AiConversation)
         return {LeaseAction::Preempt, "ai replaces dictation"};
+
+    // A recording takes the microphone from dictation. A live session keeps it.
+    if (holder == SessionKind::Dictation && incoming == SessionKind::Recorder)
+        return {LeaseAction::Preempt, "recording replaces dictation"};
 
     // Read-aloud holds only the speaker and yields to any live session.
     if (holder == SessionKind::ReadAloud)
@@ -169,7 +175,8 @@ bool lease_allows_capture(SessionKind kind) noexcept
     return kind == SessionKind::Dictation
         || kind == SessionKind::AiConversation
         || kind == SessionKind::WalkieTransmit
-        || kind == SessionKind::GroupVoice;
+        || kind == SessionKind::GroupVoice
+        || kind == SessionKind::Recorder;
 }
 
 bool lease_allows_playback(SessionKind kind) noexcept

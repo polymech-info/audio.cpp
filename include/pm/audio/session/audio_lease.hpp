@@ -18,6 +18,7 @@ enum class SessionKind : uint8_t {
     GroupVoice,
     LanRemote,
     PhoneCall,
+    Recorder,
 };
 
 enum class LeaseAction : uint8_t {

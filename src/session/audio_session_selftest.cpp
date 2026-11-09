@@ -45,11 +45,11 @@ void check_lease(State& st)
     using K = SessionKind;
     const K holders[] = {
         K::None, K::Dictation, K::ReadAloud, K::AiConversation, K::WalkieListen,
-        K::WalkieTransmit, K::GroupVoice, K::LanRemote, K::PhoneCall,
+        K::WalkieTransmit, K::GroupVoice, K::LanRemote, K::PhoneCall, K::Recorder,
     };
     const K incoming[] = {
         K::None, K::Dictation, K::ReadAloud, K::AiConversation, K::WalkieListen,
-        K::WalkieTransmit, K::GroupVoice, K::LanRemote, K::PhoneCall,
+        K::WalkieTransmit, K::GroupVoice, K::LanRemote, K::PhoneCall, K::Recorder,
     };
     for (K h : holders) {
         for (K in : incoming) {
@@ -70,6 +70,9 @@ void check_lease(State& st)
     const Pin pins[] = {
         {K::None, K::Dictation, LeaseAction::Allow, "idle", "idle allows dictation"},
         {K::None, K::PhoneCall, LeaseAction::Allow, "idle", "idle allows call notice"},
+        {K::None, K::Recorder, LeaseAction::Allow, "idle", "idle allows recording"},
+        {K::Dictation, K::Recorder, LeaseAction::Preempt, "recording replaces dictation", "recording replaces dictation"},
+        {K::Recorder, K::Dictation, LeaseAction::Deny, "audio lease busy", "dictation waits out a recording"},
         {K::Dictation, K::AiConversation, LeaseAction::Preempt, "ai replaces dictation", "ai replaces dictation"},
         {K::AiConversation, K::Dictation, LeaseAction::Deny, "audio lease busy", "dictation does not replace ai"},
         {K::Dictation, K::WalkieTransmit, LeaseAction::Deny, "audio lease busy", "walkie grant waits out dictation"},
