@@ -17,7 +17,7 @@ The host links `pm-audio-lib` and installs the hooks this library cannot see (lo
 
 One lease per process. Capture and playback refuse to start without the current token. Acquiring a lease bumps that token; the previous holder stops when `lease_token()` no longer matches, and a released token cannot be released again. An idle phone call takes the lease. A route stores a device descriptor, not a raw id. Mic PCM stays dry unless the host installed a WebRTC backend.
 
-PCM is interleaved s16. A frame count is per channel. `PcmRecordBuffer::push` copies into a fixed ring and does not open a file; a worker grows RAM and spills. A WAV export that does not fit a 32-bit RIFF header fails and leaves the recording in place. `AudioRingBuffer` is single-producer and single-consumer. `push` may wait; a capture callback uses `try_push`. `PM_AUDIO_LINK_COMMONS` defaults off. Path helpers live in `pm/audio/text.hpp`. The Tanit image forces the commons link on. `PM_AUDIO_ASAN` exists and is off unless you turn it on.
+PCM is interleaved s16. A frame count is per channel. `PcmRecordBuffer::push` copies into a fixed ring and does not open a file; a worker grows RAM and spills. A WAV export that does not fit a 32-bit RIFF header fails and leaves the recording in place. `AudioRingBuffer` is single-producer and single-consumer. `push` may wait; a capture callback uses `try_push`. Path helpers live in `pm/audio/text.hpp`. When `pm::commons` is already in the build, or an installed `pm-commons` package is on `CMAKE_PREFIX_PATH`, the library links it. `PM_AUDIO_ASAN` exists and is off unless you turn it on.
 
 ![Session lease, route, capture, echo, ring, and record](docs/architecture/session.visual-check.1440x900.light.png)
 
