@@ -30,9 +30,9 @@ option(PM_AUDIO_LINK_COMMONS "Link sibling packages/commons.cpp. The Tanit image
 
 # Whisper.cpp and ONNX stay Tanit's. This package does not FetchContent them.
 # A parent that already created `whisper` or `onnxruntime_imported` wins.
-# A standalone build points at the Tanit tree (third_party/, or an explicit root).
-set(PM_AUDIO_TANIT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH
-  "Tanit source tree that already holds onnxruntime and DeepFilterNet")
+# The product root sets PM_AUDIO_TANIT_ROOT to its source tree. Empty skips the search.
+set(PM_AUDIO_TANIT_ROOT "" CACHE PATH
+  "Optional product tree with third_party/onnxruntime-* and model folders. Empty skips that search.")
 set(PM_AUDIO_ONNX_ROOT "" CACHE PATH
   "onnxruntime tree with include/onnxruntime_cxx_api.h. Empty searches Tanit third_party.")
 set(PM_AUDIO_WHISPER_ROOT "" CACHE PATH
@@ -179,8 +179,8 @@ endif()
 
 pm_audio_ensure_miniaudio()
 
-option(PM_AUDIO_HOST_SINGLETONS "Host compiles mixed_capture.cpp once" OFF)
-if(NOT PM_AUDIO_HOST_SINGLETONS)
+# mixed_capture.cpp is the process capture table. The host compiles it once.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   list(APPEND PM_AUDIO_SOURCES src/mixed_capture.cpp)
 endif()
 
