@@ -357,6 +357,8 @@ The reply is JSON: `revised_text` plus
 does not treat that JSON as proof.
 
 Printed text is the harvest section labeled Printed Text or Text on page.
+Spoken number words match the printed digits: “four hundred” is `400`, and
+“what” matches a printed `?`.
 A line that is only a corner number is removed from the spoken candidate by
 rule. A picture sentence the harvest does not already contain asks for one
 look even when the model sets no `requires_vision`. The look must return

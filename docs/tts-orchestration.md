@@ -252,6 +252,12 @@ The sample book. Page 1 is the title, page 2 is chapter one, page 3 is chapter t
 tanit-cli reader --text tests/reader/sample.epub --dst tests/reader/out
 ```
 
+`--src` and `--input` take an image, a folder of images, or a glob, and may be repeated. Repeated options stay in the order given. One glob or one folder is ordered by the number in the name, so `plate_1.png` comes before `plate_2.png` and `plate_10.png`.
+
+```
+tanit-cli reader --src tests/reader/out/seq/plate_*.png --dst tests/reader/out --no-speak
+```
+
 The same file again. This prints `cached` and does not convert:
 
 ```
