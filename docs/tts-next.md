@@ -22,6 +22,20 @@ Shared rules, not a third checklist:
 ## Document reader
 
 Desktop first (`tanit-cli`). Android waits until these commands are stable.
+Android document conversion is a host loader, the same shape a later `rg`
+binding would use for folder search. Both stay out of this library. Search is
+a separate task.
+`--interpreter vision` renders a PDF and reads each page as a picture. The
+parent instruction is `--prompt`. It is stored as the job direction and is
+given to `--optimize` as the spoken pass. The inferred page-image prompt is
+the ingest record only: every printed line, including “Read along”, and every
+picture, including a page with one picture. It does not carry the spoken
+skip instruction. `--vision-prompt` replaces that record. The prompt is part
+of the cache key, so an existing job keeps the older wording until a new
+harvest. Word,
+PowerPoint, and fixed-layout EPUB still
+have no page renderer. `--optimize` is a later optional review of that
+narration. The default pass and the first trial are at the bottom of this file.
 The direct client in `elevenlabs_tts.cpp` already sends `seed`, `previous_text` /
 `next_text`, and `previous_request_ids` / `next_request_ids`, and it keeps the
 upstream `request-id`. The OpenAI-compatible proxy path does not.
@@ -84,6 +98,11 @@ client calls it, and the custom gateway only owns Scribe and speech-to-speech.
 - [ ] Cache key covers text, voice, model, seed, voice settings, and the stitch
       context, so a cursor replay and a full render share bytes. A chunk whose
       context is a live request id depends on that upstream generation.
+- [x] A long speak prints `progress speak i/n chars done/whole elapsed Ns estimate Ms left`.
+      The rate is characters already finished over time already spent. Before the
+      first chunk returns, the line says `estimate unavailable`. `--print-estimate`
+      checks that arithmetic without a voice call. `--all` writes `plan.json`
+      (chunk sizes only; request ids wait on the proxy).
 - [ ] Cursor speak streams the window and stops. Document speak walks chunks
       in order, fully reading each body before the next stitch, and writes a
       manifest (`offset`, `length`, `seed`, `request_id`, path).
@@ -309,3 +328,120 @@ case passes when the process exits 0 and the mp3 is non-empty. Hear-ready
 commands are in [tts-examples.md](./tts-examples.md). Request id, seed, and a
 second-run cache hit are not asserted here. Speech-studio listen is a later
 case in this same directory.
+
+---
+
+## Optimize
+
+Optional. Harvest stays. `src/cli/reader_optimize_default.cpp` reviews the
+spoken pages and rebuilds `spoken.md`. Default preset is
+`reader-accessible-child`. `--optimize-preset` selects
+`reader-review`, `reader-narrative`, `reader-faithful`, or
+`reader-vision-verify`. A name that is not in that list exits before a model
+call. `--no-tts` still skips the voice.
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38 --prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --no-tts --optimize
+```
+
+`write_file` joins a relative path to the fallback work folder, which on this
+machine is the Desktop. The pass sends absolute paths. A relative path landed
+the first run under `C:\Users\zx\Desktop\tests\...`.
+
+### Default pass
+
+The optimize rewrite runs the planner and may use tools, up to 30 iterations.
+A page rewrite without `--optimize` stays one text turn with the planner off.
+The reply is JSON: `revised_text` plus
+`changes[]` with `requires_vision` and a yes/no `question`. The controller
+does not treat that JSON as proof.
+
+Printed text is the harvest section labeled Printed Text or Text on page.
+A line that is only a corner number is removed from the spoken candidate by
+rule. A picture sentence the harvest does not already contain asks for one
+look even when the model sets no `requires_vision`. The look must return
+`{"verdict":"supported|unsupported|uncertain",...}`. A prose answer, an empty
+answer, or a missing image does not pass. `unsupported_facts` overrides a
+supported verdict. `<job>/spoken.md` is replaced only after the run files are
+written and `job.json` still has the same `source_revision`.
+
+```
+for page in 1 .. min(page_count, 5):
+    proposal = one chat turn(spoken, preset + harvest + neighbor excerpts)
+    required = printed section of the harvest
+    strip corner numbers from the candidate
+    if proposal is not JSON or the text is empty or a copy of another page:
+        status = rejected; keep spoken
+    else if a required printed span is missing:
+        status = rejected; keep spoken
+    else if a visual question is set:
+        if the image or the vision call is missing:
+            status = vision_unavailable; keep spoken
+        else:
+            look = image_understand(page-N.png, JSON verdict question)
+            supported, and no unsupported_facts -> vision_supported, commit
+            unsupported -> rejected, keep spoken
+            anything else -> vision_uncertain, keep spoken
+    else:
+        status = source_text_passed; commit
+write the run directory, re-read job.json, then replace <job>/spoken.md
+```
+
+Statuses are `rejected`, `source_text_passed`, `vision_supported`,
+`vision_uncertain`, `vision_unavailable`, `vision_skipped`, and `skipped`.
+
+### First trial
+
+`tests/reader/child-ebook.pdf`, PDF pages 34–38, five reader pages. The corner
+of each picture prints one less than the PDF index: PDF 34 shows 33, PDF 38
+shows 37. Harvest used vision at 144 dpi, then `image_understand` at longest
+edge 1280. Optimize used `tanit/text-fast`, about 18 seconds, and reported
+`revised 5`, `kept 0`, `vision 0`. Every review json says `verification: passed`.
+
+The before text is the copy the user compared, and
+`revisions/reader-accessible-child/run-001/spoken.before.md`. The after text
+is `<job>/spoken.md`. The diff is `run-001/diff.md`. Job directory:
+`tests/reader/out-child/557f6d66add42346`.
+
+What changed:
+
+- Headings `# page 34` through `# page 38` are gone, so the script no longer says which PDF page it is.
+- The two type pages lost the sentence about the paper color.
+- PDF 35 kept the printed “Read along:”. PDF 37 deleted it. Both were approved.
+- PDF 36 turned `X + 400 = 900` into “X plus 400 equals 900” and dropped the teacher’s blue coat and round glasses.
+- PDF 36 still says the pink thought has boxing gloves, and the sentence is firmer than the harvest. The pass did not open `page-3.png`.
+- PDF 38 folded the labels “Soup kitchen.” and “Cloth donation.” into sentences and dropped “comforting” and “cozy”.
+
+The score cannot show the failure. The accept rule approves any different
+prose. The default preset never asks whether a visual sentence is in the
+picture, so an invention is kept and a printed line can disappear while every
+page is marked passed.
+
+### Evidence pass
+
+`run-002` and `run-003` use the contract above. The harvest pages were not
+rewritten. `spoken.before.md` in both runs is the `run-001` script, because
+that script had already replaced `<job>/spoken.md`.
+
+`run-002` reported `reviewed 5`, `rewritten 3`, `visual 2`, `printed 5`,
+`supported 0`, `rejected 0`, `review 2`. PDF 35 and PDF 37 both kept
+“Read along”. PDF 36 copied the harvest, including the boxing-gloves
+sentence, and asked no question (`source_text_passed`). The two vision calls
+were PDF 34 and PDF 37. Both replies opened with `**Yes**`. The verdict
+parser required a bare `yes` prefix, so both became `vision_uncertain` and
+the previous narration was kept. That was a parser bug, not a picture
+disagreement.
+
+`run-003` reported `reviewed 5`, `rewritten 5`, `visual 3`, `printed 5`,
+`supported 3`, `rejected 0`, `review 0`. `**Yes**` now counts as supported.
+PDF 35 and PDF 37 again kept “Read along”, and the peach-paper sentence was
+dropped on the type page. PDF 38 kept “Soup kitchen” and “Cloth donation”.
+The vision question on PDF 38 was only the soup bowl.
+
+PDF 36 was re-visioned. The model asked whether the whiteboard shows a math
+test. The look said yes, and the page was marked `vision_supported`. The
+committed narration still says the pink thought has boxing gloves and that
+the gloves knock a cloud away. That sentence was not the question. One call
+per page lets the model spend the check on an easy claim. Re-vision did not
+test the disputed action, so this trial does not show that a second look is
+more reliable than the harvest.

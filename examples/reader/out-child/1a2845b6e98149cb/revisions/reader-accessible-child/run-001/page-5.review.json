@@ -1,0 +1,14 @@
+{
+  "missing_printed": "",
+  "output_hash": "sha256:60ebfc9033dfbf2828bff9efb2c7639fc0cf4886736b38d3f4141523ff31161a",
+  "page_id": "page-5",
+  "preset_id": "reader-accessible-child",
+  "preset_version": 1,
+  "source_page": 38,
+  "source_revision": "1c7d2f6e8e21c6d8",
+  "status": "vision_supported",
+  "vision_policy": "on_demand",
+  "vision_question": "Does the page show three pictures?",
+  "vision_requested": true,
+  "vision_verdict": "supported"
+}

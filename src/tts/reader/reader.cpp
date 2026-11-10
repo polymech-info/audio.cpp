@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <initializer_list>
 #include <filesystem>
+#include <cmath>
 #include <fstream>
+#include <sstream>
 #include <system_error>
 
 namespace pm::tts::reader {
@@ -28,6 +30,17 @@ bool write_text(const fs::path& path, const std::string& text, std::string& err)
         return false;
     }
     return true;
+}
+
+std::string read_text(const fs::path& path, std::string& err) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        err = "cannot read " + path.generic_string();
+        return {};
+    }
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    return buf.str();
 }
 
 } // namespace
@@ -168,9 +181,53 @@ const char* interpreter_name(Interpreter interpreter) {
     case Interpreter::Text: return "text";
     case Interpreter::Anydoc: return "anydoc";
     case Interpreter::ImageUnderstand: return "image_understand";
+    case Interpreter::Web: return "web";
+    case Interpreter::Vision: return "vision";
     case Interpreter::None: return "none";
     }
     return "none";
+}
+
+bool interpreter_from_name(std::string_view name, Interpreter& out) {
+    std::string lower;
+    lower.reserve(name.size());
+    for (unsigned char c : name)
+        lower.push_back(static_cast<char>(std::tolower(c)));
+    if (lower == "text")
+        out = Interpreter::Text;
+    else if (lower == "anydoc")
+        out = Interpreter::Anydoc;
+    else if (lower == "vision")
+        out = Interpreter::Vision;
+    else if (lower == "image_understand")
+        out = Interpreter::ImageUnderstand;
+    else if (lower == "web")
+        out = Interpreter::Web;
+    else
+        return false;
+    return true;
+}
+
+std::string vision_prompt_for(std::string_view parent, std::string_view given, bool& inferred) {
+    if (!given.empty()) {
+        inferred = false;
+        return std::string(given);
+    }
+    inferred = true;
+    std::string prompt;
+    prompt.reserve(parent.size() + 640);
+    prompt += "Look at this one page of the document.\n";
+    prompt += "This pass is the ingest record. A later pass may shorten it for speech. ";
+    prompt += "This pass keeps what is on the page.\n";
+    prompt += "Read every printed word as it appears, including a line that says Read along, other labels, and the page number.\n";
+    prompt += "Describe every picture. One picture is still a picture. ";
+    prompt += "If the page shows more than one, say how many and describe each picture on its own. ";
+    prompt += "Do not merge separate pictures into one scene.\n";
+    prompt += "For each picture, start with what happens and where. Then name who does it.\n";
+    prompt += "Keep the clothes and objects that a listener needs in order to picture that action.\n";
+    prompt += "Do not drop a picture or a printed line.\n";
+    prompt += "No preamble.\n";
+    return prompt;
 }
 
 namespace {
@@ -228,6 +285,10 @@ bool save_store(const Store& store, std::string& err) {
         {"stopped", store.stopped},
         {"pending", store.pending},
         {"speak_version", store.speak_version},
+        {"vision_prompt", store.vision_prompt},
+        {"vision_inferred", store.vision_inferred},
+        {"source_pages", store.source_pages},
+        {"source_revision", store.source_revision},
     };
     if (!write_text(dir / "state.json", state.dump(2), err))
         return false;
@@ -252,6 +313,131 @@ Interpreter interpreter_for_extension(std::string_view extension) {
             "ods", "odp", "csv"}))
         return Interpreter::Anydoc;
     return Interpreter::None;
+}
+
+Interpreter interpreter_for_url(std::string_view url) {
+    const auto scheme = url.find("://");
+    std::string_view path = scheme == std::string_view::npos ? url : url.substr(scheme + 3);
+    const auto slash = path.find('/');
+    path = slash == std::string_view::npos ? std::string_view{} : path.substr(slash);
+    const auto cut = path.find_first_of("?#");
+    if (cut != std::string_view::npos)
+        path = path.substr(0, cut);
+    const auto dot = path.rfind('.');
+    const auto dir = path.rfind('/');
+    if (dot == std::string_view::npos || (dir != std::string_view::npos && dot < dir))
+        return Interpreter::Web;
+    const Interpreter by_ext = interpreter_for_extension(path.substr(dot));
+    return by_ext == Interpreter::None ? Interpreter::Web : by_ext;
+}
+
+namespace {
+
+bool starts_with(std::string_view bytes, std::string_view prefix) {
+    return bytes.size() >= prefix.size() && bytes.substr(0, prefix.size()) == prefix;
+}
+
+bool starts_with_ci(std::string_view bytes, std::string_view lower_prefix) {
+    if (bytes.size() < lower_prefix.size())
+        return false;
+    for (std::size_t i = 0; i < lower_prefix.size(); ++i) {
+        const auto c = static_cast<unsigned char>(bytes[i]);
+        const char lower = static_cast<char>(std::tolower(c));
+        if (lower != lower_prefix[i])
+            return false;
+    }
+    return true;
+}
+
+std::string_view skip_bom_space(std::string_view bytes) {
+    if (bytes.size() >= 3
+        && static_cast<unsigned char>(bytes[0]) == 0xEF
+        && static_cast<unsigned char>(bytes[1]) == 0xBB
+        && static_cast<unsigned char>(bytes[2]) == 0xBF)
+        bytes.remove_prefix(3);
+    while (!bytes.empty() && std::isspace(static_cast<unsigned char>(bytes.front())))
+        bytes.remove_prefix(1);
+    return bytes;
+}
+
+bool looks_html(std::string_view bytes) {
+    bytes = skip_bom_space(bytes);
+    return starts_with_ci(bytes, "<!doctype")
+        || starts_with_ci(bytes, "<html")
+        || starts_with_ci(bytes, "<head")
+        || starts_with_ci(bytes, "<body")
+        || starts_with_ci(bytes, "<meta")
+        || starts_with_ci(bytes, "<?xml");
+}
+
+bool looks_image(std::string_view bytes) {
+    if (starts_with(bytes, "\x89PNG") || starts_with(bytes, "\xFF\xD8\xFF")
+        || starts_with(bytes, "GIF87a") || starts_with(bytes, "GIF89a")
+        || starts_with(bytes, "BM"))
+        return true;
+    if (bytes.size() >= 4
+        && ((starts_with(bytes, "II") && static_cast<unsigned char>(bytes[2]) == 0x2A)
+            || (starts_with(bytes, "MM") && static_cast<unsigned char>(bytes[2]) == 0x00
+                && static_cast<unsigned char>(bytes[3]) == 0x2A)))
+        return true;
+    if (bytes.size() >= 12 && starts_with(bytes, "RIFF") && bytes.substr(8, 4) == "WEBP")
+        return true;
+    if (bytes.size() >= 12 && bytes.substr(4, 4) == "ftyp") {
+        const std::string_view brand = bytes.substr(8, 4);
+        return brand == "heic" || brand == "heif" || brand == "mif1" || brand == "msf1";
+    }
+    return false;
+}
+
+bool looks_anydoc(std::string_view bytes) {
+    if (starts_with(bytes, "%PDF") || starts_with(skip_bom_space(bytes), "{\\rtf"))
+        return true;
+    if (bytes.size() >= 4
+        && static_cast<unsigned char>(bytes[0]) == 0xD0
+        && static_cast<unsigned char>(bytes[1]) == 0xCF
+        && static_cast<unsigned char>(bytes[2]) == 0x11
+        && static_cast<unsigned char>(bytes[3]) == 0xE0)
+        return true;
+    return bytes.size() >= 4
+        && static_cast<unsigned char>(bytes[0]) == 'P'
+        && static_cast<unsigned char>(bytes[1]) == 'K'
+        && (static_cast<unsigned char>(bytes[2]) == 0x03
+            || static_cast<unsigned char>(bytes[2]) == 0x05
+            || static_cast<unsigned char>(bytes[2]) == 0x07);
+}
+
+bool looks_text(std::string_view bytes) {
+    if (bytes.empty() || bytes.find('\0') != std::string_view::npos)
+        return false;
+    return !looks_html(bytes);
+}
+
+Interpreter interpreter_for_prefix(std::string_view bytes) {
+    if (bytes.empty())
+        return Interpreter::None;
+    if (looks_image(bytes))
+        return Interpreter::ImageUnderstand;
+    if (looks_anydoc(bytes))
+        return Interpreter::Anydoc;
+    if (looks_html(bytes))
+        return Interpreter::Web;
+    if (looks_text(bytes))
+        return Interpreter::Text;
+    return Interpreter::None;
+}
+
+} // namespace
+
+Interpreter interpreter_for_url(std::string_view url, std::string_view stream) {
+    const Interpreter from_path = interpreter_for_url(url);
+    const Interpreter from_stream = interpreter_for_prefix(stream);
+    if (from_stream == Interpreter::None)
+        return from_path;
+    // Plain text only replaces a page with no file type. A .csv or .pdf path
+    // stays put unless the bytes are a stronger type, such as HTML or an image.
+    if (from_stream == Interpreter::Text && from_path != Interpreter::Web)
+        return from_path;
+    return from_stream;
 }
 
 std::string document_hash(std::string_view key) {
@@ -347,6 +533,16 @@ bool load_store(const std::string& dir, Store& store, std::string& err) {
     store.stopped = job.value("stopped", false);
     store.pending = job.value("pending", false);
     store.speak_version = job.value("speak_version", 0);
+    store.source_revision = job.value("source_revision", std::string());
+    store.vision_prompt = job.value("vision_prompt", std::string());
+    store.vision_inferred = job.value("vision_inferred", false);
+    store.source_pages.clear();
+    if (job.contains("source_pages") && job["source_pages"].is_array()) {
+        for (const auto& page : job["source_pages"]) {
+            if (page.is_number_integer())
+                store.source_pages.push_back(page.get<int>());
+        }
+    }
     std::ifstream state_in(root / "state.json", std::ios::binary);
     if (state_in) {
         try {
@@ -402,10 +598,58 @@ bool write_pages(const std::string& dir, Store& store, const std::string& source
     }
     store.pending = !store.direction.empty();
     store.speak_version = 0;
+    store.source_revision = document_hash(source);
     return save_store(store, err);
 }
 
+namespace {
+
+int version_index(const std::string& name, const std::string& prefix) {
+    if (name.rfind(prefix, 0) != 0 || name.size() < prefix.size() + 4)
+        return 0;
+    if (name.compare(name.size() - 3, 3, ".md") != 0)
+        return 0;
+    try {
+        return std::stoi(name.substr(prefix.size(), name.size() - prefix.size() - 3));
+    } catch (...) {
+        return 0;
+    }
+}
+
+bool version_revision_matches(const fs::path& dir, int page, int version, const std::string& revision) {
+    const fs::path meta = dir / ("page-" + std::to_string(page) + ".v" + std::to_string(version) + ".json");
+    std::ifstream in(meta, std::ios::binary);
+    if (!in)
+        return false;
+    try {
+        nlohmann::json saved;
+        in >> saved;
+        return saved.value("source_revision", std::string()) == revision;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace
+
 int latest_page_version(const Store& store) {
+    if (store.dir.empty() || store.page < 1)
+        return 0;
+    const std::string prefix = "page-" + std::to_string(store.page) + ".v";
+    const fs::path dir(store.dir);
+    int best = 0;
+    std::error_code ec;
+    for (const fs::directory_entry& ent : fs::directory_iterator(dir, ec)) {
+        if (ec)
+            break;
+        const int n = version_index(ent.path().filename().string(), prefix);
+        if (n > best && version_revision_matches(dir, store.page, n, store.source_revision))
+            best = n;
+    }
+    return best;
+}
+
+int highest_page_version_file(const Store& store) {
     if (store.dir.empty() || store.page < 1)
         return 0;
     const std::string prefix = "page-" + std::to_string(store.page) + ".v";
@@ -414,17 +658,9 @@ int latest_page_version(const Store& store) {
     for (const fs::directory_entry& ent : fs::directory_iterator(fs::path(store.dir), ec)) {
         if (ec)
             break;
-        const std::string name = ent.path().filename().string();
-        if (name.rfind(prefix, 0) != 0 || name.size() < prefix.size() + 4)
-            continue;
-        if (name.compare(name.size() - 3, 3, ".md") != 0)
-            continue;
-        try {
-            const int n = std::stoi(name.substr(prefix.size(), name.size() - prefix.size() - 3));
-            if (n > best)
-                best = n;
-        } catch (...) {
-        }
+        const int n = version_index(ent.path().filename().string(), prefix);
+        if (n > best)
+            best = n;
     }
     return best;
 }
@@ -439,7 +675,7 @@ bool write_page_version(Store& store, const std::string& prompt, const std::stri
         err = "empty version";
         return false;
     }
-    const int version = latest_page_version(store) + 1;
+    const int version = highest_page_version_file(store) + 1;
     const fs::path root(store.dir);
     const std::string stem = "page-" + std::to_string(store.page) + ".v" + std::to_string(version);
     if (!write_text(root / (stem + ".md"), text, err))
@@ -448,6 +684,7 @@ bool write_page_version(Store& store, const std::string& prompt, const std::stri
         {"page", store.page},
         {"version", version},
         {"prompt", prompt},
+        {"source_revision", store.source_revision},
     };
     if (!chat_preset.empty())
         meta["chat_preset"] = chat_preset;
@@ -465,6 +702,88 @@ std::string speak_file(const Store& store) {
             + ".v" + std::to_string(store.speak_version) + ".md")).generic_string();
     }
     return page_file(store);
+}
+
+std::string document_speak_text(const Store& store, std::string& err) {
+    err.clear();
+    if (store.page_count < 1 || store.dir.empty()) {
+        err = "no pages";
+        return {};
+    }
+    std::string out;
+    for (int i = 1; i <= store.page_count; ++i) {
+        Store page = store;
+        page.page = i;
+        page.speak_version = latest_page_version(page);
+        const std::string file = speak_file(page);
+        if (file.empty())
+            continue;
+        const std::string text = read_text(file, err);
+        if (!err.empty())
+            return {};
+        if (text.empty())
+            continue;
+        if (!out.empty())
+            out += "\n\n";
+        out += text;
+    }
+    if (out.empty())
+        err = "no speakable text";
+    return out;
+}
+
+std::int64_t estimate_left_ms(std::int64_t done, std::int64_t whole, std::int64_t elapsed_ms) {
+    if (whole <= 0 || done < 0 || elapsed_ms < 0)
+        return -1;
+    if (done >= whole)
+        return 0;
+    if (done == 0 || elapsed_ms == 0)
+        return -1;
+    const long double left = (static_cast<long double>(elapsed_ms)
+        * static_cast<long double>(whole - done))
+        / static_cast<long double>(done);
+    if (left < 0)
+        return -1;
+    return static_cast<std::int64_t>(std::llround(left));
+}
+
+std::string format_progress(const WorkProgress& progress) {
+    const std::string phase = progress.phase.empty() ? "work" : progress.phase;
+    std::ostringstream line;
+    line << "progress " << phase;
+    if (progress.total > 0)
+        line << " " << progress.index << "/" << progress.total;
+    line << " chars " << progress.done << "/" << progress.whole
+         << " elapsed " << ((progress.elapsed_ms + 500) / 1000) << "s";
+    const std::int64_t left = estimate_left_ms(progress.done, progress.whole, progress.elapsed_ms);
+    if (left < 0)
+        line << " estimate unavailable";
+    else
+        line << " estimate " << ((left + 500) / 1000) << "s left";
+    return line.str();
+}
+
+bool write_speak_plan(const std::string& dir, std::int64_t chars,
+                      const std::vector<std::int64_t>& chunk_chars, std::string& err) {
+    if (dir.empty()) {
+        err = "no job directory";
+        return false;
+    }
+    nlohmann::json chunks = nlohmann::json::array();
+    std::int64_t seen = 0;
+    for (std::size_t i = 0; i < chunk_chars.size(); ++i) {
+        chunks.push_back({
+            {"index", static_cast<int>(i + 1)},
+            {"chars", chunk_chars[i]},
+        });
+        seen += chunk_chars[i];
+    }
+    const nlohmann::json plan = {
+        {"chars", chars},
+        {"chunk_chars", seen},
+        {"chunks", std::move(chunks)},
+    };
+    return write_text(fs::path(dir) / "plan.json", plan.dump(2), err);
 }
 
 bool set_page(Store& store, int page, std::string& err) {
@@ -499,6 +818,33 @@ bool stop_pages(Store& store, std::string& err) {
 bool resume_pages(Store& store, std::string& err) {
     store.stopped = false;
     return save_store(store, err);
+}
+
+bool erase_store(const std::string& dir, std::string& err) {
+    err.clear();
+    if (dir.empty()) {
+        err = "no job directory";
+        return false;
+    }
+    const fs::path path(dir);
+    const fs::path name = path.filename();
+    if (name.empty() || name == "." || name == ".." || !path.has_parent_path()) {
+        err = "refusing to erase " + path.generic_string();
+        return false;
+    }
+    std::error_code ec;
+    if (!fs::exists(path, ec))
+        return true;
+    if (ec || !fs::is_directory(path, ec)) {
+        err = ec ? ec.message() : "not a job directory";
+        return false;
+    }
+    fs::remove_all(path, ec);
+    if (ec) {
+        err = ec.message();
+        return false;
+    }
+    return true;
 }
 
 std::string page_file(const Store& store) {

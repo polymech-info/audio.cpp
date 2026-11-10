@@ -1,0 +1,23 @@
+{
+  "direction": "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story.",
+  "hash": "1a2845b6e98149cb",
+  "interpreter": "vision",
+  "language": "",
+  "mtime": "134387984594291596",
+  "page": 1,
+  "page_count": 5,
+  "path": "C:\\Users\\zx\\Desktop\\pixlwiz\\pixlwiz\\tests\\reader\\child-ebook.pdf",
+  "pending": true,
+  "source_pages": [
+    34,
+    35,
+    36,
+    37,
+    38
+  ],
+  "source_revision": "1c7d2f6e8e21c6d8",
+  "speak_version": 0,
+  "stopped": false,
+  "vision_inferred": true,
+  "vision_prompt": "Look at this one page of the document.\nThis pass is the ingest record. A later pass may shorten it for speech. This pass keeps what is on the page.\nRead every printed word as it appears, including a line that says Read along, other labels, and the page number.\nDescribe every picture. One picture is still a picture. If the page shows more than one, say how many and describe each picture on its own. Do not merge separate pictures into one scene.\nFor each picture, start with what happens and where. Then name who does it.\nKeep the clothes and objects that a listener needs in order to picture that action.\nDo not drop a picture or a printed line.\nNo preamble.\n"
+}

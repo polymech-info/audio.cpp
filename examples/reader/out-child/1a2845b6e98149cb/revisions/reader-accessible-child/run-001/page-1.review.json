@@ -1,0 +1,14 @@
+{
+  "missing_printed": "",
+  "output_hash": "sha256:f56e27323a7def2cbac623e9b94b4b346fd1e4de685bead4d766c58902747968",
+  "page_id": "page-1",
+  "preset_id": "reader-accessible-child",
+  "preset_version": 1,
+  "source_page": 34,
+  "source_revision": "1c7d2f6e8e21c6d8",
+  "status": "vision_supported",
+  "vision_policy": "on_demand",
+  "vision_question": "Does the picture show a spiky brownish-gray shape sliding across a gymnasium floor on a yellow burst?",
+  "vision_requested": true,
+  "vision_verdict": "supported"
+}

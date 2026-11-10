@@ -1,0 +1,14 @@
+{
+  "missing_printed": "x + 400 = 900; x = ?; 800 - 50 =; 600 + 70 =",
+  "output_hash": "sha256:70f71886953064c246cc07530a87276a35d808f9cdc0da032d234e509212bc72",
+  "page_id": "page-3",
+  "preset_id": "reader-accessible-child",
+  "preset_version": 1,
+  "source_page": 36,
+  "source_revision": "1c7d2f6e8e21c6d8",
+  "status": "rejected",
+  "vision_policy": "on_demand",
+  "vision_question": "",
+  "vision_requested": false,
+  "vision_verdict": ""
+}

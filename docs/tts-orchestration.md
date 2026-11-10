@@ -258,6 +258,12 @@ The same file again. This prints `cached` and does not convert:
 tanit-cli reader --text tests/reader/sample.epub --dst tests/reader/out
 ```
 
+The job directory is the path plus the interpreter, so `text` and `anydoc` do not share a cache. `--refresh` writes the pages again. A rewrite is spoken only when it was made from that source. Older `page-N.vK.md` files stay in the directory. `--clean` deletes the directory and exits.
+
+```
+tanit-cli reader --text tests/reader/sample.epub --dst tests/reader/out --clean
+```
+
 Speak is the output of this command. It writes `page-N.mp3` next to the page
 and plays it. Ctrl+C cancels the next chunk and stops playback. A page longer
 than `--chunk-max-chars` (800) is split on sentences, each request gets the
@@ -272,6 +278,23 @@ Chapter one, spoken, and the mp3 left in the job directory:
 tanit-cli reader --text tests/reader/sample.epub --dst tests/reader/out --next --no-play
 ```
 
+`--all` joins every page, using each page's latest spoken version, into one file.
+The script is `spoken.md`. The audio is `document.mp3`, or `document.wav` when the
+text takes more than one chunk. `--audio` overrides that path. Before speech it
+writes `plan.json` and prints `progress plan`. Each chunk then prints
+`progress speak i/n chars done/whole elapsed Ns estimate Ms left`. The estimate
+starts once the first chunk has finished. `--print-estimate` checks the same
+line without calling the voice proxy.
+
+```
+tanit-cli reader --text tests/reader/sample.epub --dst tests/reader/out --all --no-play
+```
+
+The `read` tool does this for an agent. `path` is a file or an http(s) URL.
+`prompt` rewrites the joined text once. `play` defaults to false. On Android the
+phone voice writes one wav, chunked the same way. PDF and office stay on the
+desktop loader.
+
 A prompt rewrites the current page only. `page-N.md` stays the converted
 source. The spoken text is `page-N.v1.md`, then `page-N.v2.md` for the next
 prompt. `--chat-preset` selects the saved chat router and model for that turn.
@@ -282,6 +305,76 @@ same prompt across the whole document, one chunk at a time.
 tanit-cli reader --text tests/tts-orch/fixture.txt --dst tests/tts-orch/out --prompt "summarize, in german" --chat-preset "My Preset" --no-play
 ```
 
+`--interpreter` overrides the extension map. The names are `text`, `anydoc`, `vision`, `image_understand`, and `web`. `vision` renders each PDF page to a picture and reads that picture. `--prompt` is the spoken direction. It is stored on the job and used by `--optimize`. The page-image prompt is `--vision-prompt`, or an inferred ingest record that keeps every printed line and every picture. That record does not include the spoken direction. `--pages 34-38` keeps those PDF pages, as reader pages 1 through 5. Word, PowerPoint, and EPUB have no page renderer, so `vision` stops on those files. `--no-speak` renders the pages and records both prompts, and does not call the vision model. Leaving `--no-speak` off calls `image_understand` on each page, then speaks.
+
+A picture-book PDF, 53 PDF pages. The default interpreter is anydoc. These stay on `--no-speak`, so nothing calls a vision model or the voice proxy. The parent prompt is the one below. `--pages` counts PDF pages. On this file the number printed in the corner is one lower, so PDF page 34 shows 33.
+
+What the extension map would do:
+
+```
+tanit-cli reader --print-interpreter --text tests/reader/child-ebook.pdf
+```
+
+Anydoc on the whole file:
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --no-speak
+```
+
+Pages 34–38 as pictures. Reader page 1 is PDF page 34. The job records `source_pages` and an inferred `vision_prompt`. Each page is `page-N.png` plus `page-N.md`. A run against an existing job prints `cached`.
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38 --prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --no-speak
+```
+
+The same pages again. This prints `cached`:
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38 --prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --no-speak
+```
+
+PDF page 36 is reader page 3. The corner of that picture prints 35:
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38 --prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --page 3 --no-speak
+```
+
+The next reader page:
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38 --prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --next --no-speak
+```
+
+`--no-tts` still reads each page image and writes `spoken.md`. The voice proxy stays off. `--no-speak` does not call the vision model.
+
+`--optimize` is an optional review after the harvest. It writes `revisions/<preset>/run-NNN/` and rebuilds `spoken.md`. `page-N.md` stays. The default preset is `reader-accessible-child`. `reader-vision-verify` reads each page image once. The other presets do not.
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38 --prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --no-tts --optimize
+```
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38 --prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --no-tts
+```
+
+Every selected page joined into `spoken.md`:
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38 --prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --all --no-speak
+```
+
+A page range without `vision` stops:
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --pages 34-38 --no-speak
+```
+
+Erase that job:
+
+```
+tanit-cli reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38 --prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --clean
+```
+
 A text file with no prompt is one page. anydoc is not called. The page is what is spoken:
 
 ```
@@ -290,10 +383,16 @@ tanit-cli reader --text tests/tts-orch/fixture.txt --dst tests/tts-orch/out --no
 
 ```
  tanit-cli reader --text tests/reader/test.pdf --dst tests/reader/out --page 3 --voice-id EXAVITQu4vr4xnSDxMaL  --prompt "in german, skip parts that are unsuited for text to speech - explain as for a 8th grader"
+```
 
+An http(s) URL is cached by that URL. The path extension is the first guess. The start of the downloaded stream then decides: PDF and office bytes go through anydoc, an image stays an image, HTML is the DOM converted to markdown, and plain or markdown text is spoken as text.
+```
+ tanit-cli reader --text https://service.polymech.info/user/3bb4cfbf-318b-44d3-a9d3-35680e738421/pages/katbot-injection-machine.md --dst tests/reader/out-url --prompt "in french, skip parts that are unsuited for text to speech - explain as for a 8th grader"
 ```
 npm run test:tts-orch
 npm run test:reader
+
+
 ```
 
 ## References

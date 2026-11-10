@@ -1,0 +1,1 @@
+tanit-cli.exe reader --text tests/reader/child-ebook.pdf --dst tests/reader/out-child --interpreter vision --pages 34-38--prompt "Read this page aloud to a child. Keep the story gentle. Use the printed words, and skip anything that is not part of the story." --optimize --refresh

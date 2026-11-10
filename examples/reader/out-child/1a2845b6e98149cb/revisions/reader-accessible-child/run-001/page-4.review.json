@@ -1,0 +1,14 @@
+{
+  "missing_printed": "",
+  "output_hash": "sha256:980fa630e229176e4fdf45ed4b143cf597a13adb55c7ee4affca710271f10144",
+  "page_id": "page-4",
+  "preset_id": "reader-accessible-child",
+  "preset_version": 1,
+  "source_page": 37,
+  "source_revision": "1c7d2f6e8e21c6d8",
+  "status": "source_text_passed",
+  "vision_policy": "on_demand",
+  "vision_question": "",
+  "vision_requested": false,
+  "vision_verdict": ""
+}
