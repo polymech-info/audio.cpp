@@ -8,6 +8,7 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
@@ -275,9 +276,107 @@ std::vector<std::string> split_text_for_tts(const std::string& text,
     return chunks;
 }
 
-// Request body for one chunk, including trial voice_settings and stitching
-// context. previous_text / next_text are the neighbouring chunks (empty at
-// the edges); previous_request_ids are the ids of up-to-3 preceding chunks.
+bool model_is_v4(const std::string& model) {
+    return model == "eleven_v4" || model == "eleven_v4_turbo"
+        || model == "tanit-speech-v4"
+        || (model.size() >= 10 && model.compare(model.size() - 10, 10, "/eleven_v4") == 0)
+        || (model.size() >= 16 && model.compare(model.size() - 16, 16, "/eleven_v4_turbo") == 0);
+}
+
+bool model_is_multilingual_v2(const std::string& model) {
+    return model.find("multilingual_v2") != std::string::npos;
+}
+
+bool format_rejects_stereo(const std::string& fmt) {
+    const auto f = pm::audio::lower_ascii(fmt);
+    return f.rfind("pcm", 0) == 0 || f.rfind("ulaw", 0) == 0 || f.rfind("alaw", 0) == 0;
+}
+
+nlohmann::json voice_settings_json(const ElevenLabsTTSConfig& cfg) {
+    nlohmann::json vs = nlohmann::json::object();
+    const bool v4 = model_is_v4(cfg.model_id);
+    if (cfg.send_voice_settings) {
+        vs["stability"] = cfg.stability;
+        vs["similarity_boost"] = cfg.similarity_boost;
+        if (!v4) {
+            vs["style"] = cfg.style;
+            vs["use_speaker_boost"] = cfg.use_speaker_boost;
+        }
+    }
+    if (!v4) {
+        double speed = cfg.speed;
+        if (speed < 0.7) speed = 0.7;
+        if (speed > 1.2) speed = 1.2;
+        if (speed != 1.0)
+            vs["speed"] = speed;
+    } else if (cfg.clone_strength >= 0.0 && cfg.clone_strength <= 1.0) {
+        vs["clone_strength"] = cfg.clone_strength;
+    }
+    return vs;
+}
+
+void append_convert_fields(nlohmann::json& body,
+                           const ElevenLabsTTSConfig& cfg,
+                           const std::string& previous_text,
+                           const std::string& next_text,
+                           const std::vector<std::string>& previous_request_ids,
+                           const std::vector<std::string>& next_request_ids) {
+    const auto vs = voice_settings_json(cfg);
+    if (!vs.empty())
+        body["voice_settings"] = vs;
+    if (cfg.seed >= 0)
+        body["seed"] = cfg.seed;
+    if (!cfg.language_code.empty() && !model_is_multilingual_v2(cfg.model_id))
+        body["language_code"] = cfg.language_code;
+    if (!cfg.apply_text_normalization.empty())
+        body["apply_text_normalization"] = cfg.apply_text_normalization;
+    if (cfg.apply_language_text_normalization)
+        body["apply_language_text_normalization"] = true;
+    if (cfg.use_pvc_as_ivc)
+        body["use_pvc_as_ivc"] = true;
+    if (!cfg.pronunciation_dictionaries.empty()) {
+        nlohmann::json locs = nlohmann::json::array();
+        const std::size_t n = std::min<std::size_t>(cfg.pronunciation_dictionaries.size(), 3);
+        for (std::size_t i = 0; i < n; ++i) {
+            nlohmann::json loc;
+            loc["pronunciation_dictionary_id"] = cfg.pronunciation_dictionaries[i].id;
+            if (!cfg.pronunciation_dictionaries[i].version_id.empty())
+                loc["version_id"] = cfg.pronunciation_dictionaries[i].version_id;
+            locs.push_back(std::move(loc));
+        }
+        body["pronunciation_dictionary_locators"] = std::move(locs);
+    }
+    nlohmann::json effects = nlohmann::json::object();
+    const auto& fx = cfg.audio_effects;
+    if (!fx.filter_preset_id.empty())
+        effects["filter_preset_id"] = fx.filter_preset_id;
+    if (fx.distance >= 0.0)
+        effects["distance"] = fx.distance;
+    if (!fx.environment_id.empty())
+        effects["environment_id"] = fx.environment_id;
+    if (!fx.background_noise_id.empty())
+        effects["background_noise_id"] = fx.background_noise_id;
+    if (fx.send_level >= 0.0)
+        effects["send_level"] = fx.send_level;
+    if (fx.pan >= -1.0 && fx.pan <= 1.0)
+        effects["pan"] = fx.pan;
+    if (!effects.empty())
+        body["audio_effects"] = std::move(effects);
+    if (!cfg.output_format.empty())
+        body["output_format"] = cfg.output_format;
+    if (!previous_request_ids.empty())
+        body["previous_request_ids"] = previous_request_ids;
+    else if (!previous_text.empty())
+        body["previous_text"] = previous_text;
+    if (!next_request_ids.empty())
+        body["next_request_ids"] = next_request_ids;
+    else if (!next_text.empty())
+        body["next_text"] = next_text;
+}
+
+// Request body for one chunk, including voice_settings and stitching context.
+// previous_text / next_text are the neighbouring chunks (empty at the edges);
+// previous_request_ids are the ids of up-to-3 preceding chunks.
 std::string build_tts_body(const ElevenLabsTTSConfig& cfg,
                            const std::string& chunk_text,
                            const std::string& previous_text,
@@ -287,35 +386,8 @@ std::string build_tts_body(const ElevenLabsTTSConfig& cfg,
     nlohmann::json body;
     body["text"]     = chunk_text;
     body["model_id"] = cfg.model_id;
-    double speed = cfg.speed;
-    if (speed < 0.7) speed = 0.7;
-    if (speed > 1.2) speed = 1.2;
-    const bool send_speed = (speed != 1.0);
-    if (cfg.send_voice_settings || send_speed) {
-        nlohmann::json vs = nlohmann::json::object();
-        if (cfg.send_voice_settings) {
-            vs["stability"]          = cfg.stability;
-            vs["similarity_boost"]   = cfg.similarity_boost;
-            vs["style"]              = cfg.style;
-            vs["use_speaker_boost"]  = cfg.use_speaker_boost;
-        }
-        if (send_speed)
-            vs["speed"] = speed;
-        body["voice_settings"] = std::move(vs);
-    }
-    if (cfg.seed >= 0)
-        body["seed"] = cfg.seed;
-    if (!cfg.apply_text_normalization.empty())
-        body["apply_text_normalization"] = cfg.apply_text_normalization;
-    // IDs and text are not cumulative: if IDs are present, omit the text twin.
-    if (!previous_request_ids.empty())
-        body["previous_request_ids"] = previous_request_ids;
-    else if (!previous_text.empty())
-        body["previous_text"] = previous_text;
-    if (!next_request_ids.empty())
-        body["next_request_ids"] = next_request_ids;
-    else if (!next_text.empty())
-        body["next_text"] = next_text;
+    append_convert_fields(body, cfg, previous_text, next_text,
+                          previous_request_ids, next_request_ids);
     return body.dump();
 }
 
@@ -327,6 +399,58 @@ void remember_request_id(std::vector<std::string>& ids, std::string id, std::siz
 }
 
 } // namespace
+
+std::vector<std::string> tts_text_chunks(const std::string& text,
+                                         const ElevenLabsTTSConfig& cfg) {
+    return split_text_for_tts(text, cfg);
+}
+
+bool tts_language_code_ok(const std::string& code) {
+    if (code.size() == 2)
+        return std::isalpha(static_cast<unsigned char>(code[0]))
+            && std::isalpha(static_cast<unsigned char>(code[1]));
+    return code == "ast" || code == "yue" || code == "ceb"
+        || code == "fil" || code == "kam" || code == "ckb";
+}
+
+std::string tts_effects_format_error(const ElevenLabsTTSConfig& cfg) {
+    if (!format_rejects_stereo(cfg.output_format))
+        return {};
+    const auto& fx = cfg.audio_effects;
+    const bool pan = fx.pan >= -1.0 && fx.pan <= 1.0 && fx.pan != 0.0;
+    const double send = fx.send_level >= 0.0 ? fx.send_level : 1.0;
+    const bool reverb = !fx.environment_id.empty() && send > 0.0;
+    if (!pan && !reverb)
+        return {};
+    return "audio_effects reverb and pan are stereo, and " + cfg.output_format
+        + " is mono";
+}
+
+std::string elevenlabs_tts_request_url(const std::string& voice_id,
+                                       const std::string& output_format,
+                                       bool stream) {
+    std::string url = "https://api.elevenlabs.io/v1/text-to-speech/" + voice_id;
+    if (stream)
+        url += "/stream";
+    url += "?output_format=" + output_format;
+    return url;
+}
+
+std::string tts_request_body(const ElevenLabsTTSConfig& cfg, const std::string& text) {
+    return build_tts_body(cfg, text, cfg.context_previous_text, cfg.context_next_text,
+                          cfg.context_previous_request_ids, cfg.context_next_request_ids);
+}
+
+std::string tts_proxy_fields_json(const ElevenLabsTTSConfig& cfg,
+                                  const std::string& previous_text,
+                                  const std::string& next_text) {
+    nlohmann::json body = nlohmann::json::object();
+    append_convert_fields(body, cfg, previous_text, next_text, {}, {});
+    body.erase("output_format");
+    if (!cfg.output_format.empty() && cfg.output_format.find('_') != std::string::npos)
+        body["output_format"] = cfg.output_format;
+    return body.dump();
+}
 
 void apply_synthesis_options(ElevenLabsTTSConfig& cfg, const TtsSynthesisOptions& opts)
 {
@@ -534,9 +658,7 @@ TtsSynthResult elevenlabs_tts_synthesize_result(const std::string& text,
     if (!c) throw std::runtime_error("elevenlabs_tts: curl_easy_init failed");
 
     // Build URL: /v1/text-to-speech/{voice_id}?output_format={fmt}
-    const std::string url =
-        "https://api.elevenlabs.io/v1/text-to-speech/" + cfg.voice_id
-        + "?output_format=" + cfg.output_format;
+    const std::string url = elevenlabs_tts_request_url(cfg.voice_id, cfg.output_format, false);
 
     const std::string auth_hdr  = "xi-api-key: " + cfg.api_key;
     const std::string ct_hdr    = "Content-Type: application/json";
@@ -691,9 +813,7 @@ void elevenlabs_tts_synthesize_stream(const std::string&          text,
     // which defeats the ring buffer — pre-buffer fills late, then we play out
     // of a fully-buffered response with no further chunks arriving. The /stream
     // route emits bytes as they're generated, so the ring stays fed.
-    const std::string url =
-        "https://api.elevenlabs.io/v1/text-to-speech/" + cfg.voice_id + "/stream"
-        + "?output_format=" + cfg.output_format;
+    const std::string url = elevenlabs_tts_request_url(cfg.voice_id, cfg.output_format, true);
 
     const std::string auth_hdr = "xi-api-key: " + cfg.api_key;
     const std::string ct_hdr   = "Content-Type: application/json";

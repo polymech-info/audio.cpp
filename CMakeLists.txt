@@ -84,6 +84,7 @@ set(PM_AUDIO_SOURCES
   src/stt/whisper_probe.cpp
   src/filter/models.cpp
   src/tts/tts_text.cpp
+  src/tts/reader/reader.cpp
   src/tts/md_speech.cpp
   src/tts/moss_tts.cpp
   src/stt/whisper_infer.cpp

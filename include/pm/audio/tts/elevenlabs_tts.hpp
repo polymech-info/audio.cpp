@@ -60,6 +60,33 @@ struct ElevenLabsTTSConfig {
     bool         use_speaker_boost = true;
     std::string  apply_text_normalization;
 
+    /// ISO 639-1, or ast / yue / ceb / fil / kam / ckb. Empty lets the model detect.
+    /// Omitted for eleven_multilingual_v2, which rejects the field.
+    std::string  language_code;
+    /// 0–1. Sent only for eleven_v4 and eleven_v4_turbo. < 0 omits it.
+    double       clone_strength = -1;
+    /// Japanese text normalization. Off unless set. It is slow.
+    bool         apply_language_text_normalization = false;
+    /// Use the instant-clone read of a professional voice.
+    bool         use_pvc_as_ivc = false;
+
+    struct PronunciationLocator {
+        std::string id;
+        std::string version_id;
+    };
+    std::vector<PronunciationLocator> pronunciation_dictionaries;
+
+    /// Unset sentinels: distance and send_level < 0, pan > 1.
+    struct AudioEffects {
+        std::string filter_preset_id;
+        double      distance = -1;
+        std::string environment_id;
+        std::string background_noise_id;
+        double      send_level = -1;
+        double      pan = 2;
+    };
+    AudioEffects audio_effects;
+
     /// Stitching: if request IDs are set, the matching *_text field is omitted
     /// (ElevenLabs ignores previous_text when previous_request_ids is present).
     std::string              context_previous_text;
@@ -69,6 +96,34 @@ struct ElevenLabsTTSConfig {
 };
 
 void apply_synthesis_options(ElevenLabsTTSConfig& cfg, const TtsSynthesisOptions& opts);
+
+// Sentence chunks for one TTS job. A single element when chunking is off
+// or the text already fits in chunk_max_chars.
+std::vector<std::string> tts_text_chunks(const std::string& text,
+                                         const ElevenLabsTTSConfig& cfg);
+
+// True for a 2-letter code or ast, yue, ceb, fil, kam, ckb.
+bool tts_language_code_ok(const std::string& code);
+
+// pcm / ulaw / alaw reject reverb and a non-zero pan. Empty when the pair is legal.
+std::string tts_effects_format_error(const ElevenLabsTTSConfig& cfg);
+
+// Query is output_format only. enable_logging stays at the API default (on):
+// stitching is unavailable when it is off. optimize_streaming_latency is not
+// sent. It is deprecated, and level 4 turns the text normalizer off.
+std::string elevenlabs_tts_request_url(const std::string& voice_id,
+                                       const std::string& output_format,
+                                       bool stream);
+
+// One convert body. v4 sends stability and similarity only, plus clone_strength
+// when set. Style, speed, and SSML are left out for v4.
+std::string tts_request_body(const ElevenLabsTTSConfig& cfg, const std::string& text);
+
+// Fields merged onto an OpenAI /audio/speech body. Includes output_format when
+// cfg.output_format is the ElevenLabs codec_rate_bitrate form.
+std::string tts_proxy_fields_json(const ElevenLabsTTSConfig& cfg,
+                                  const std::string& previous_text,
+                                  const std::string& next_text);
 
 // Synchronous: fetches all audio bytes then returns them.
 // Throws std::runtime_error on network or API error.
