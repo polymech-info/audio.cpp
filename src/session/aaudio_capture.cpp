@@ -134,6 +134,8 @@ struct Stream {
     std::condition_variable cv;
     AAudioStream* stream = nullptr;
     std::atomic<std::int64_t> frames{0};
+    // Peak envelope, 0..32767. The ring stays intact for the WAV.
+    std::atomic<int> envelope{0};
     std::atomic<bool> lost{false};
     std::atomic<int> error_code{0};
     std::atomic<bool> running{false};
@@ -186,6 +188,20 @@ aaudio_data_callback_result_t capture_data(AAudioStream*, void*, void* audioData
         if (ring && audioData)
             ring->write_or_drop(static_cast<const std::int16_t*>(audioData),
                                 static_cast<std::size_t>(numFrames));
+        if (audioData) {
+            const auto* samples = static_cast<const std::int16_t*>(audioData);
+            int burst = 0;
+            for (int32_t i = 0; i < numFrames; ++i) {
+                int mag = samples[i];
+                if (mag < 0)
+                    mag = -mag;
+                if (mag > burst)
+                    burst = mag;
+            }
+            const int prev = s.envelope.load(std::memory_order_relaxed);
+            const int decayed = prev - prev / 8;
+            s.envelope.store(burst > decayed ? burst : decayed, std::memory_order_relaxed);
+        }
         s.frames.fetch_add(numFrames, std::memory_order_relaxed);
     }
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
@@ -377,6 +393,7 @@ AAudioStatus finish_capture_locked(Stream& s, const std::string& wav_path)
         s.pcm_store.reset();
     }
     s.frames.store(0);
+    s.envelope.store(0, std::memory_order_relaxed);
     s.lost.store(false);
     s.opened_id = -1;
     AAudioStatus status;
@@ -426,6 +443,7 @@ AAudioStatus aaudio_capture_start(std::uint64_t token, int device_id, bool speci
     close_locked(s);
     s.pcm_store.reset();
     s.frames.store(0);
+    s.envelope.store(0, std::memory_order_relaxed);
     s.lost.store(false);
     s.error_code.store(0, std::memory_order_release);
     s.finished.store(false);
@@ -490,6 +508,7 @@ AAudioStatus aaudio_capture_status()
     status.device_lost = s.lost.load();
     status.opened_id = s.opened_id;
     status.frames = s.frames.load();
+    status.level = s.envelope.load(std::memory_order_relaxed) / 32768.f;
     status.sample_rate = s.sample_rate;
     status.dropped = s.pcm_store ? static_cast<std::int64_t>(s.pcm_store->dropped()) : 0;
     const int error_code = s.error_code.load(std::memory_order_acquire);

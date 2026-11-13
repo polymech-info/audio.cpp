@@ -22,6 +22,8 @@ struct AAudioStatus {
     int sample_rate = 0;
     std::int64_t frames = 0;
     std::int64_t dropped = 0;
+    // 0..1 mic envelope. Does not consume the capture ring.
+    float level = 0.f;
     std::string reason;
 };
 
