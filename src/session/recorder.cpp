@@ -312,8 +312,8 @@ struct Engine {
             }
             local.aec_active = apm && apm->active();
             if ((aec || agc) && !local.aec_active)
-                local.filter_note = "Echo removal and volume leveling aren't available on this phone.";
-            else if (local.filter_note.find("Echo removal") != std::string::npos)
+                local.filter_note = "Volume leveling isn't available on this phone.";
+            else if (local.filter_note.find("Volume leveling") != std::string::npos)
                 local.filter_note.clear();
             if (local.aec_active && (aec || agc))
                 apm->process_capture(pcm16.data(), pcm16.size());
