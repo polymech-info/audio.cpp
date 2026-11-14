@@ -590,17 +590,39 @@ void mix_loop(Session* session)
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
-    auto next = clock::now();
+    int waited_ms = 0;
     while (session->mix_run.load()) {
-        next += std::chrono::milliseconds(k_tick_ms);
-        std::this_thread::sleep_until(next);
-        if (next < clock::now())
-            next = clock::now();
         if (!session->mix_run.load())
             break;
+        for (const auto& leg : session->legs)
+            leg->trim(k_frames + k_slack);
+        bool all_ready = !session->legs.empty();
+        size_t fullest = 0;
+        for (const auto& leg : session->legs) {
+            const size_t n = leg->available();
+            if (n > fullest)
+                fullest = n;
+            if (n < k_frames)
+                all_ready = false;
+        }
+        // Nobody has a block yet. Do not invent a silence block — that is the
+        // click in the stream and in the recording.
+        if (fullest < k_frames) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+        // A callback often lands as 20 ms. Wait for the short legs only while
+        // the fullest one is still inside that window. Once it is a block
+        // ahead, emit and keep that source on time; waiting again between
+        // every block is what slowed the mix to a third of realtime.
+        if (!all_ready && fullest < k_frames * 2 && waited_ms < 20) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            waited_ms += 2;
+            continue;
+        }
+        waited_ms = 0;
         std::fill(sum.begin(), sum.end(), 0.f);
         for (const auto& leg : session->legs) {
-            leg->trim(k_frames + k_slack);
             const size_t got = leg->take(chunk.data(), k_frames);
             if (got < k_frames)
                 leg->underruns.fetch_add(1, std::memory_order_relaxed);
