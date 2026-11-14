@@ -30,6 +30,8 @@ public:
 
     void process(const int16_t* in, size_t frames, std::vector<int16_t>& out,
                  const std::atomic_bool* cancel = nullptr);
+    // Emits the unfinished hop and the overlap-add tail. The tail is silence-padded.
+    void flush(std::vector<int16_t>& out);
 
 private:
     struct Impl;

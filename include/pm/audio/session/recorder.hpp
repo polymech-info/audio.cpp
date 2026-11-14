@@ -53,4 +53,7 @@ void recorder_tap(bool on);
 // Drains queued 16 kHz frames. 0 when the tap is off or empty.
 std::size_t recorder_pull_pcm(std::int16_t* dst, std::size_t max_samples);
 
+// Resampler, WAV finalization, tap ring, and idle start/stop. Empty when every check passed.
+std::string recorder_logic_checks();
+
 } // namespace pm::audio::session

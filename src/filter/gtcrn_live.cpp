@@ -289,6 +289,25 @@ void StreamSession::process(const int16_t* in, size_t frames, std::vector<int16_
                              impl_->pending.begin() + static_cast<std::ptrdiff_t>(consumed));
 }
 
+void StreamSession::flush(std::vector<int16_t>& out)
+{
+    if (!impl_)
+        return;
+    while (!impl_->pending.empty()) {
+        if (impl_->pending.size() < static_cast<size_t>(kHop))
+            impl_->pending.resize(static_cast<size_t>(kHop), 0.f);
+        impl_->process_hop(impl_->pending.data(), out);
+        impl_->pending.erase(impl_->pending.begin(),
+                             impl_->pending.begin() + static_cast<std::ptrdiff_t>(kHop));
+    }
+    if (!impl_->started)
+        return;
+    // The first hop is held for overlap-add. Two silent hops release that tail.
+    const std::vector<float> zeros(static_cast<size_t>(kHop), 0.f);
+    impl_->process_hop(zeros.data(), out);
+    impl_->process_hop(zeros.data(), out);
+}
+
 struct LiveHop::Impl {
     StreamSession sess;
     std::function<void(const int16_t*, size_t)> out;
@@ -401,6 +420,7 @@ void StreamSession::close() {}
 bool StreamSession::is_open() const noexcept { return false; }
 void StreamSession::process(const int16_t*, size_t, std::vector<int16_t>&,
                              const std::atomic_bool*) {}
+void StreamSession::flush(std::vector<int16_t>&) {}
 
 LiveHop::LiveHop() = default;
 LiveHop::~LiveHop() = default;

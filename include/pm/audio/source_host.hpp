@@ -1,7 +1,8 @@
 #pragma once
 
-// One capture session: a microphone, a loopback endpoint, or both when mix is built.
-// Callers own the transport. The LLM server mounts this on /v1/audio/*.
+// One capture session: a microphone, a loopback endpoint, or a mix of several
+// of each. A mix list carries a gain per source; the host sums them into one
+// stream. Callers own the transport. The LLM server mounts this on /v1/audio/*.
 
 #include <nlohmann/json.hpp>
 
@@ -30,7 +31,7 @@ public:
     /// Interleaved s16 from the running capture. Returns frames, 0 on timeout,
     /// or -1 when nothing is running. One reader; a slow reader drops old samples.
     int pull(std::int16_t* dst, int max_frames, int wait_ms);
-    /// Body fields: input, and for mix also mic and loopback.
+    /// Body fields: input, and for mix also mic and loopback, or sources[{spec,gain}].
     SourceReply start(const nlohmann::json& body);
     /// Switch a running session, or store input while idle.
     SourceReply select(const nlohmann::json& body);

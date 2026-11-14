@@ -11,12 +11,14 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -60,17 +62,49 @@ std::string trim_copy(std::string s)
     return s.substr(b, e - b);
 }
 
-bool device_named(const std::vector<DeviceInfo>& devs, const std::string& name)
+bool device_named(const std::vector<DeviceInfo>& devs, const std::string& name, std::string& err)
 {
-    if (name.empty())
-        return !devs.empty();
-    for (const auto& d : devs)
+    if (name.size() > 1024) {
+        err = "device name is too long";
+        return false;
+    }
+    if (name.empty()) {
+        if (devs.empty()) {
+            err = "no device";
+            return false;
+        }
+        return true;
+    }
+    int exact = 0;
+    int partial = 0;
+    for (const auto& d : devs) {
         if (d.name == name)
-            return true;
-    for (const auto& d : devs)
-        if (icontains(d.name, name))
-            return true;
+            ++exact;
+        else if (icontains(d.name, name))
+            ++partial;
+    }
+    if (exact == 1 || (exact == 0 && partial == 1))
+        return true;
+    if (exact > 1 || partial > 1) {
+        err = "more than one device matches \"" + name + "\"";
+        return false;
+    }
+    err = "no device matching \"" + name + "\"";
     return false;
+}
+
+int64_t steady_ns()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+uint32_t fresh_peak(uint32_t peak, int64_t at, int64_t now)
+{
+    if (at == 0 || now - at > 280'000'000)
+        return 0;
+    return peak;
 }
 
 nlohmann::json devices_json(const std::vector<DeviceInfo>& devs, const char* kind)
@@ -91,11 +125,19 @@ nlohmann::json devices_json(const std::vector<DeviceInfo>& devs, const char* kin
     return arr;
 }
 
+struct LegSpec {
+    std::string spec;
+    std::string kind;
+    std::string name;
+    float       gain = 1.f;
+};
+
 struct Spec {
     std::string kind;
     std::string mic;
     std::string loopback;
     std::string input;
+    std::vector<LegSpec> legs;
 };
 
 bool parse_spec(const std::string& raw_in,
@@ -149,6 +191,103 @@ bool parse_spec(const std::string& raw_in,
     return true;
 }
 
+bool split_leg(const std::string& raw_in, LegSpec& out, std::string& err)
+{
+    const std::string raw = trim_copy(raw_in);
+    if (raw.rfind("mic:", 0) == 0) {
+        out.kind = "mic";
+        out.name = trim_copy(raw.substr(4));
+    } else if (raw.rfind("loopback:", 0) == 0) {
+        out.kind = "loopback";
+        out.name = trim_copy(raw.substr(9));
+    } else {
+        err = "a source spec is mic:<name> or loopback:<name>";
+        return false;
+    }
+    if (out.name.empty() || out.name.size() > 1024) {
+        err = "a source needs a device name";
+        return false;
+    }
+    out.spec = out.kind + ":" + out.name;
+    return true;
+}
+
+/// sources[] present means the client owns the mix. Absent means the legacy input.
+bool parse_leg_list(const nlohmann::json& body, std::vector<LegSpec>& legs, std::string& err)
+{
+    legs.clear();
+    if (!body.is_object() || !body.contains("sources") || body["sources"].is_null())
+        return true;
+    if (!body["sources"].is_array()) {
+        err = "sources must be a list";
+        return false;
+    }
+    const auto& arr = body["sources"];
+    if (arr.empty()) {
+        err = "sources is empty";
+        return false;
+    }
+    if (arr.size() > 8) {
+        err = "too many sources";
+        return false;
+    }
+#if !defined(FEATURE_AUDIO_MIX) || !FEATURE_AUDIO_MIX
+    err = "audio mix is not built into this binary";
+    return false;
+#else
+    for (const auto& item : arr) {
+        if (!item.is_object()) {
+            err = "each source needs a spec";
+            return false;
+        }
+        bool bad = false;
+        const std::string spec = json_string(item, "spec", bad);
+        if (bad || spec.empty()) {
+            err = "each source needs a spec";
+            return false;
+        }
+        float gain = 1.f;
+        if (item.contains("gain") && !item["gain"].is_null()) {
+            if (!item["gain"].is_number()) {
+                err = "gain must be a number";
+                return false;
+            }
+            const double raw = item["gain"].get<double>();
+            if (!std::isfinite(raw)) {
+                err = "gain must be a finite number";
+                return false;
+            }
+            gain = std::clamp(static_cast<float>(raw), 0.f, 2.f);
+        }
+        LegSpec leg;
+        if (!split_leg(spec, leg, err))
+            return false;
+        leg.gain = gain;
+        for (const auto& prev : legs) {
+            if (prev.spec == leg.spec) {
+                err = "duplicate source";
+                return false;
+            }
+        }
+        legs.push_back(std::move(leg));
+    }
+    return true;
+#endif
+}
+
+void fill_bus(Spec& spec)
+{
+    spec.mic.clear();
+    spec.loopback.clear();
+    if (spec.legs.size() == 1) {
+        spec.kind  = spec.legs[0].kind;
+        spec.input = spec.legs[0].spec;
+    } else {
+        spec.kind  = "mix";
+        spec.input = "mix";
+    }
+}
+
 SourceReply bad_request(const std::string& err, const std::string& input = {})
 {
     SourceReply reply;
@@ -187,6 +326,7 @@ struct PcmRing {
     size_t                  read  = 0;
     size_t                  count = 0;
     bool                    closed = false;
+    std::atomic<uint64_t>   dropped{0};
 
     PcmRing()
         : buf(static_cast<size_t>(k_rate) * k_channels)
@@ -199,44 +339,64 @@ void push_pcm(const std::shared_ptr<PcmRing>& ring, const int16_t* pcm, size_t f
     if (!ring || !pcm || frame_count == 0)
         return;
     size_t n = frame_count * k_channels;
-    std::lock_guard<std::mutex> lk(ring->mu);
-    if (ring->closed)
-        return;
-    const size_t cap = ring->buf.size();
-    if (n >= cap) {
-        pcm += n - cap;
-        n = cap;
-        ring->read  = 0;
-        ring->count = 0;
-    } else if (ring->count + n > cap) {
-        const size_t drop = ring->count + n - cap;
-        ring->read = (ring->read + drop) % cap;
-        ring->count -= drop;
+    bool wake = false;
+    {
+        std::lock_guard<std::mutex> lk(ring->mu);
+        if (ring->closed)
+            return;
+        const size_t cap = ring->buf.size();
+        size_t dropped = 0;
+        if (n >= cap) {
+            dropped = ring->count + (n - cap);
+            pcm += n - cap;
+            n = cap;
+            ring->read  = 0;
+            ring->count = 0;
+        } else if (ring->count + n > cap) {
+            dropped = ring->count + n - cap;
+            ring->read = (ring->read + dropped) % cap;
+            ring->count -= dropped;
+        }
+        if (dropped > 0)
+            ring->dropped.fetch_add(dropped / k_channels, std::memory_order_relaxed);
+        const size_t write = (ring->read + ring->count) % cap;
+        const size_t first = std::min(n, cap - write);
+        std::memcpy(ring->buf.data() + write, pcm, first * sizeof(int16_t));
+        if (n > first)
+            std::memcpy(ring->buf.data(), pcm + first, (n - first) * sizeof(int16_t));
+        ring->count += n;
+        wake = true;
     }
-    const size_t write = (ring->read + ring->count) % cap;
-    const size_t first = std::min(n, cap - write);
-    std::memcpy(ring->buf.data() + write, pcm, first * sizeof(int16_t));
-    if (n > first)
-        std::memcpy(ring->buf.data(), pcm + first, (n - first) * sizeof(int16_t));
-    ring->count += n;
-    ring->cv.notify_one();
+    if (wake)
+        ring->cv.notify_one();
 }
 
 void close_ring(const std::shared_ptr<PcmRing>& ring)
 {
     if (!ring)
         return;
-    std::lock_guard<std::mutex> lk(ring->mu);
-    ring->closed = true;
+    {
+        std::lock_guard<std::mutex> lk(ring->mu);
+        ring->read = 0;
+        ring->count = 0;
+        ring->closed = true;
+    }
     ring->cv.notify_all();
 }
 
-void note_pcm(std::atomic<uint64_t>& frames, std::atomic<uint32_t>& peak,
+struct Levels {
+    std::atomic<uint64_t> frames{0};
+    std::atomic<uint32_t> peak{0};
+    std::atomic<int64_t>  peak_at{0};
+    std::atomic<int64_t>  last_ns{0};
+};
+
+void note_pcm(const std::shared_ptr<Levels>& levels,
               const std::shared_ptr<PcmRing>& ring, const int16_t* pcm, size_t frame_count)
 {
-    if (!pcm || frame_count == 0)
+    if (!levels || !pcm || frame_count == 0)
         return;
-    frames.fetch_add(frame_count, std::memory_order_relaxed);
+    levels->frames.fetch_add(frame_count, std::memory_order_relaxed);
     uint32_t local = 0;
     const size_t n = frame_count * k_channels;
     for (size_t i = 0; i < n; ++i) {
@@ -246,11 +406,127 @@ void note_pcm(std::atomic<uint64_t>& frames, std::atomic<uint32_t>& peak,
         if (static_cast<uint32_t>(v) > local)
             local = static_cast<uint32_t>(v);
     }
-    uint32_t cur = peak.load(std::memory_order_relaxed);
-    while (local > cur && !peak.compare_exchange_weak(cur, local, std::memory_order_relaxed)) {
+    const int64_t now = steady_ns();
+    levels->last_ns.store(now, std::memory_order_relaxed);
+    const uint32_t cur = levels->peak.load(std::memory_order_relaxed);
+    const int64_t at   = levels->peak_at.load(std::memory_order_relaxed);
+    if (local >= cur || now - at > 280'000'000) {
+        levels->peak.store(local, std::memory_order_relaxed);
+        levels->peak_at.store(now, std::memory_order_relaxed);
     }
     push_pcm(ring, pcm, frame_count);
 }
+
+struct Leg {
+    std::string spec;
+    std::string kind;
+    std::string requested;
+    std::string opened;
+    std::atomic<float> gain{1.f};
+    std::atomic<uint32_t> peak{0};
+    std::atomic<int64_t> peak_at{0};
+    std::atomic<int64_t> last_ns{0};
+    std::atomic<uint64_t> dropped{0};
+    std::atomic<uint64_t> underruns{0};
+    std::mutex mu;
+    std::vector<int16_t> buf;
+    size_t read  = 0;
+    size_t count = 0;
+    std::unique_ptr<AudioInput> mic;
+    std::unique_ptr<DesktopAudioCapture> loop;
+
+    Leg()
+        : buf(static_cast<size_t>(k_rate) * k_channels)
+    {
+    }
+
+    void push(const int16_t* pcm, size_t frames)
+    {
+        if (!pcm || frames == 0)
+            return;
+        const size_t n = frames * k_channels;
+        uint32_t local = 0;
+        for (size_t i = 0; i < n; ++i) {
+            int v = pcm[i];
+            if (v < 0)
+                v = -v;
+            if (static_cast<uint32_t>(v) > local)
+                local = static_cast<uint32_t>(v);
+        }
+        const int64_t now = steady_ns();
+        last_ns.store(now, std::memory_order_relaxed);
+        const uint32_t cur = peak.load(std::memory_order_relaxed);
+        const int64_t at   = peak_at.load(std::memory_order_relaxed);
+        if (local >= cur || now - at > 280'000'000) {
+            peak.store(local, std::memory_order_relaxed);
+            peak_at.store(now, std::memory_order_relaxed);
+        }
+        std::lock_guard<std::mutex> lk(mu);
+        const size_t cap = buf.size();
+        size_t samples = n;
+        const int16_t* src = pcm;
+        size_t overflow = 0;
+        if (samples >= cap) {
+            overflow = count + (samples - cap);
+            src += samples - cap;
+            samples = cap;
+            read = 0;
+            count = 0;
+        } else if (count + samples > cap) {
+            overflow = count + samples - cap;
+            read = (read + overflow) % cap;
+            count -= overflow;
+        }
+        if (overflow > 0)
+            dropped.fetch_add(overflow / k_channels, std::memory_order_relaxed);
+        const size_t write = (read + count) % cap;
+        const size_t first = std::min(samples, cap - write);
+        std::memcpy(buf.data() + write, src, first * sizeof(int16_t));
+        if (samples > first)
+            std::memcpy(buf.data(), src + first, (samples - first) * sizeof(int16_t));
+        count += samples;
+    }
+
+    size_t take(int16_t* dst, size_t frames)
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        size_t samples = std::min(frames * k_channels, count);
+        samples -= samples % k_channels;
+        if (samples == 0)
+            return 0;
+        const size_t cap = buf.size();
+        const size_t first = std::min(samples, cap - read);
+        std::memcpy(dst, buf.data() + read, first * sizeof(int16_t));
+        if (samples > first)
+            std::memcpy(dst + first, buf.data(), (samples - first) * sizeof(int16_t));
+        read = (read + samples) % cap;
+        count -= samples;
+        return samples / k_channels;
+    }
+
+    size_t available()
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        return count / k_channels;
+    }
+
+    /// Drop oldest samples when a device runs ahead of the mixer clock.
+    void trim(size_t max_frames)
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        const size_t cap = buf.size();
+        const size_t keep = std::min(max_frames * k_channels, cap);
+        if (count <= keep)
+            return;
+        size_t drop = count - keep;
+        drop -= drop % k_channels;
+        if (drop == 0)
+            return;
+        read = (read + drop) % cap;
+        count -= drop;
+        dropped.fetch_add(drop / k_channels, std::memory_order_relaxed);
+    }
+};
 
 struct Session {
     std::string input;
@@ -259,40 +535,169 @@ struct Session {
     std::string requested_loop;
     std::string mic_name;
     std::string loop_name;
-    std::atomic<uint64_t> frames{0};
-    std::atomic<uint32_t> peak{0};
+    std::shared_ptr<Levels> levels = std::make_shared<Levels>();
     std::shared_ptr<PcmRing> ring;
     std::unique_ptr<AudioInput> mic;
     std::unique_ptr<DesktopAudioCapture> loop;
 #if defined(FEATURE_AUDIO_MIX) && FEATURE_AUDIO_MIX
     std::unique_ptr<MixedAudioCapture> mix;
 #endif
+    std::vector<std::shared_ptr<Leg>> legs;
+    std::atomic<bool> mix_run{false};
+    std::thread mixer;
+
+    ~Session()
+    {
+        mix_run.store(false);
+        if (mixer.joinable())
+            mixer.join();
+        for (const auto& leg : legs) {
+            if (leg && leg->mic)
+                leg->mic->stop();
+            if (leg && leg->loop)
+                leg->loop->stop();
+        }
+        if (mic)
+            mic->stop();
+        if (loop)
+            loop->stop();
+#if defined(FEATURE_AUDIO_MIX) && FEATURE_AUDIO_MIX
+        if (mix)
+            mix->stop();
+#endif
+    }
 };
+
+void mix_loop(Session* session)
+{
+    using clock = std::chrono::steady_clock;
+    constexpr int k_tick_ms = 10;
+    const size_t k_frames = std::max<size_t>(1, (static_cast<size_t>(k_rate) * k_tick_ms) / 1000);
+    const size_t k_slack = k_frames * 4;
+    std::vector<int16_t> chunk(k_frames * k_channels);
+    std::vector<int16_t> mixed(k_frames * k_channels);
+    std::vector<float> sum(k_frames * k_channels);
+
+    const auto primed = clock::now() + std::chrono::milliseconds(40);
+    while (session->mix_run.load() && clock::now() < primed) {
+        bool ready = !session->legs.empty();
+        for (const auto& leg : session->legs) {
+            if (leg->available() < k_frames)
+                ready = false;
+        }
+        if (ready)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    auto next = clock::now();
+    while (session->mix_run.load()) {
+        next += std::chrono::milliseconds(k_tick_ms);
+        std::this_thread::sleep_until(next);
+        if (next < clock::now())
+            next = clock::now();
+        if (!session->mix_run.load())
+            break;
+        std::fill(sum.begin(), sum.end(), 0.f);
+        for (const auto& leg : session->legs) {
+            leg->trim(k_frames + k_slack);
+            const size_t got = leg->take(chunk.data(), k_frames);
+            if (got < k_frames)
+                leg->underruns.fetch_add(1, std::memory_order_relaxed);
+            const float gain = leg->gain.load(std::memory_order_relaxed);
+            const size_t n = got * k_channels;
+            for (size_t i = 0; i < n; ++i)
+                sum[i] += static_cast<float>(chunk[i]) * gain;
+        }
+        for (size_t i = 0; i < k_frames * k_channels; ++i)
+            mixed[i] = static_cast<int16_t>(std::clamp(sum[i], -32768.f, 32767.f));
+        note_pcm(session->levels, session->ring, mixed.data(), k_frames);
+    }
+}
 
 bool prepare_devices(const Spec& spec, std::string& err)
 {
     if (spec.kind == "mic" || spec.kind == "mix") {
         const auto mics = enumerate_capture_devices();
-        if (!device_named(mics, spec.mic)) {
-            err = spec.mic.empty() ? "no capture device"
-                                   : "no capture device matching \"" + spec.mic + "\"";
+        if (!device_named(mics, spec.mic, err)) {
+            if (err == "no device")
+                err = "no capture device";
             return false;
         }
     }
     if (spec.kind == "loopback" || spec.kind == "mix") {
         const auto loops = enumerate_loopback_devices();
-        if (!device_named(loops, spec.loopback)) {
-            err = spec.loopback.empty()
-                      ? "no loopback device"
-                      : "no loopback device matching \"" + spec.loopback + "\"";
+        if (!device_named(loops, spec.loopback, err)) {
+            if (err == "no device")
+                err = "no loopback device";
             return false;
         }
     }
     return true;
 }
 
+std::unique_ptr<Session> open_bus(const Spec& spec, std::string& err)
+{
+    const auto mics = enumerate_capture_devices();
+    const auto loops = enumerate_loopback_devices();
+    for (const auto& want : spec.legs) {
+        const auto& devs = want.kind == "mic" ? mics : loops;
+        if (!device_named(devs, want.name, err))
+            return nullptr;
+    }
+    auto session = std::make_unique<Session>();
+    session->input = spec.input;
+    session->kind = spec.kind;
+    session->ring = std::make_shared<PcmRing>();
+    try {
+        for (const auto& want : spec.legs) {
+            auto leg = std::make_shared<Leg>();
+            leg->spec = want.spec;
+            leg->kind = want.kind;
+            leg->requested = want.name;
+            leg->gain.store(want.gain);
+            std::weak_ptr<Leg> weak = leg;
+            auto on_pcm = [weak](const int16_t* pcm, size_t frames) {
+                if (const auto held = weak.lock())
+                    held->push(pcm, frames);
+            };
+            if (want.kind == "mic") {
+                leg->mic = std::make_unique<AudioInput>();
+                leg->mic->start(on_pcm, want.name, k_rate, k_channels, false);
+                if (!leg->mic->is_running()) {
+                    err = "microphone capture failed";
+                    return nullptr;
+                }
+                leg->opened = leg->mic->opened_device_name();
+            } else {
+                leg->loop = std::make_unique<DesktopAudioCapture>();
+                if (!leg->loop->start(on_pcm, want.name, err, k_rate, k_channels)) {
+                    if (err.empty())
+                        err = "loopback capture failed";
+                    return nullptr;
+                }
+                leg->opened = leg->loop->opened_device_name();
+            }
+            if (leg->kind == "mic" && session->mic_name.empty())
+                session->mic_name = leg->opened;
+            if (leg->kind == "loopback" && session->loop_name.empty())
+                session->loop_name = leg->opened;
+            session->legs.push_back(std::move(leg));
+        }
+    } catch (const std::exception& ex) {
+        err = ex.what();
+        return nullptr;
+    }
+    session->mix_run.store(true);
+    Session* raw = session.get();
+    session->mixer = std::thread([raw] { mix_loop(raw); });
+    return session;
+}
+
 std::unique_ptr<Session> open_session(const Spec& spec, std::string& err)
 {
+    if (!spec.legs.empty())
+        return open_bus(spec, err);
     if (!prepare_devices(spec, err))
         return nullptr;
     auto session = std::make_unique<Session>();
@@ -304,23 +709,27 @@ std::unique_ptr<Session> open_session(const Spec& spec, std::string& err)
     try {
         if (spec.kind == "mic") {
             session->mic = std::make_unique<AudioInput>();
-            Session* raw = session.get();
+            auto levels = session->levels;
             auto ring = session->ring;
             session->mic->start(
-                [raw, ring](const int16_t* pcm, size_t frames) {
-                    note_pcm(raw->frames, raw->peak, ring, pcm, frames);
+                [levels, ring](const int16_t* pcm, size_t frames) {
+                    note_pcm(levels, ring, pcm, frames);
                 },
                 spec.mic, k_rate, k_channels, false);
+            if (!session->mic->is_running()) {
+                err = "microphone capture failed";
+                return nullptr;
+            }
             session->mic_name = session->mic->opened_device_name();
             return session;
         }
         if (spec.kind == "loopback") {
             session->loop = std::make_unique<DesktopAudioCapture>();
-            Session* raw = session.get();
+            auto levels = session->levels;
             auto ring = session->ring;
             if (!session->loop->start(
-                    [raw, ring](const int16_t* pcm, size_t frames) {
-                        note_pcm(raw->frames, raw->peak, ring, pcm, frames);
+                    [levels, ring](const int16_t* pcm, size_t frames) {
+                        note_pcm(levels, ring, pcm, frames);
                     },
                     spec.loopback, err, k_rate, k_channels)) {
                 if (err.empty())
@@ -332,14 +741,14 @@ std::unique_ptr<Session> open_session(const Spec& spec, std::string& err)
         }
 #if defined(FEATURE_AUDIO_MIX) && FEATURE_AUDIO_MIX
         session->mix = std::make_unique<MixedAudioCapture>();
-        Session* raw = session.get();
+        auto levels = session->levels;
         auto ring = session->ring;
         const auto cfg = make_recording_capture_config(
             "mix", spec.mic, spec.loopback, 1.0f, 1.0f, CaptureSource::mix);
         if (!session->mix->start(
                 cfg,
-                [raw, ring](const int16_t* pcm, size_t frames) {
-                    note_pcm(raw->frames, raw->peak, ring, pcm, frames);
+                [levels, ring](const int16_t* pcm, size_t frames) {
+                    note_pcm(levels, ring, pcm, frames);
                 },
                 err)) {
             if (err.empty())
@@ -361,50 +770,160 @@ std::unique_ptr<Session> open_session(const Spec& spec, std::string& err)
 
 bool same_request(const Session& live, const Spec& spec)
 {
+    if (!spec.legs.empty() || !live.legs.empty()) {
+        if (spec.legs.size() != live.legs.size())
+            return false;
+        for (size_t i = 0; i < spec.legs.size(); ++i) {
+            if (spec.legs[i].spec != live.legs[i]->spec)
+                return false;
+        }
+        return true;
+    }
     return live.kind == spec.kind && live.requested_mic == spec.mic
            && live.requested_loop == spec.loopback;
+}
+
+void apply_gains(Session& live, const Spec& spec)
+{
+    for (const auto& want : spec.legs) {
+        for (const auto& leg : live.legs) {
+            if (leg->spec == want.spec)
+                leg->gain.store(want.gain);
+        }
+    }
+}
+
+void collect_devices(const Session& live, std::vector<std::pair<std::string, std::string>>& out)
+{
+    if (!live.legs.empty()) {
+        for (const auto& leg : live.legs)
+            out.emplace_back(leg->kind, leg->opened.empty() ? leg->requested : leg->opened);
+        return;
+    }
+    if (live.kind == "mic" || live.kind == "mix")
+        out.emplace_back("mic", live.mic_name.empty() ? live.requested_mic : live.mic_name);
+    if (live.kind == "loopback" || live.kind == "mix")
+        out.emplace_back("loopback", live.loop_name.empty() ? live.requested_loop : live.loop_name);
+}
+
+void collect_devices(const Spec& spec, std::vector<std::pair<std::string, std::string>>& out)
+{
+    if (!spec.legs.empty()) {
+        for (const auto& leg : spec.legs)
+            out.emplace_back(leg.kind, leg.name);
+        return;
+    }
+    if (spec.kind == "mic" || spec.kind == "mix")
+        out.emplace_back("mic", spec.mic);
+    if (spec.kind == "loopback" || spec.kind == "mix")
+        out.emplace_back("loopback", spec.loopback);
+}
+
+bool shares_device(const Session& live, const Spec& spec)
+{
+    std::vector<std::pair<std::string, std::string>> opened;
+    std::vector<std::pair<std::string, std::string>> wanted;
+    collect_devices(live, opened);
+    collect_devices(spec, wanted);
+    for (const auto& have : opened) {
+        for (const auto& need : wanted) {
+            if (have.first != need.first)
+                continue;
+            if (have.second.empty() || need.second.empty() || have.second == need.second)
+                return true;
+            if (icontains(have.second, need.second) || icontains(need.second, have.second))
+                return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
 
 struct SourceHost::Impl {
+    std::mutex control;
     mutable std::mutex mu;
-    std::string pending;
+    Spec pending;
     std::unique_ptr<Session> live;
 
     nlohmann::json status_unlocked() const
     {
         const bool running = static_cast<bool>(live);
-        return {
+        const int64_t now = steady_ns();
+        const uint32_t peak = running
+            ? fresh_peak(live->levels->peak.load(std::memory_order_relaxed),
+                         live->levels->peak_at.load(std::memory_order_relaxed), now)
+            : 0;
+        const int64_t last = running ? live->levels->last_ns.load(std::memory_order_relaxed) : 0;
+        const bool stalled = running && (last == 0 || now - last > 500'000'000);
+        nlohmann::json out = {
             {"ok", true},
             {"running", running},
             {"phase", running ? "capture" : "idle"},
-            {"input", running ? live->input : pending},
-            {"kind", running ? live->kind : std::string{}},
-            {"frames", running ? live->frames.load(std::memory_order_relaxed) : 0},
-            {"peak", running ? live->peak.load(std::memory_order_relaxed) : 0},
+            {"input", running ? live->input : pending.input},
+            {"kind", running ? live->kind : pending.kind},
+            {"frames", running ? live->levels->frames.load(std::memory_order_relaxed) : 0},
+            {"peak", peak},
+            {"stalled", stalled},
+            {"dropped", running && live->ring ? live->ring->dropped.load(std::memory_order_relaxed) : 0},
             {"sampleRate", running ? k_rate : 0},
             {"channels", running ? k_channels : 0},
             {"mic", running ? live->mic_name : std::string{}},
             {"loopback", running ? live->loop_name : std::string{}},
 #if defined(FEATURE_AUDIO_MIX) && FEATURE_AUDIO_MIX
             {"mix", true},
+            {"bus", true},
 #else
             {"mix", false},
+            {"bus", false},
 #endif
         };
+        nlohmann::json rows = nlohmann::json::array();
+        if (running) {
+            for (const auto& leg : live->legs) {
+                const int64_t heard = leg->last_ns.load(std::memory_order_relaxed);
+                rows.push_back({
+                    {"spec", leg->spec},
+                    {"kind", leg->kind},
+                    {"name", leg->opened.empty() ? leg->requested : leg->opened},
+                    {"gain", leg->gain.load()},
+                    {"peak", fresh_peak(leg->peak.load(std::memory_order_relaxed),
+                                         leg->peak_at.load(std::memory_order_relaxed), now)},
+                    {"dropped", leg->dropped.load(std::memory_order_relaxed)},
+                    {"underruns", leg->underruns.load(std::memory_order_relaxed)},
+                    {"stalled", heard == 0 || now - heard > 500'000'000},
+                });
+            }
+        }
+        out["sources"] = std::move(rows);
+        return out;
     }
 
-    bool start_spec(const Spec& spec, std::string& err, bool& already, bool& switched)
+    bool start_spec(const Spec& spec, std::string& err, bool& already, bool& switched, bool& gains_only)
     {
         already = false;
         switched = false;
+        gains_only = false;
         {
             std::lock_guard<std::mutex> lk(mu);
             if (live && same_request(*live, spec)) {
+                if (!spec.legs.empty())
+                    apply_gains(*live, spec);
+                pending = spec;
                 already = true;
+                gains_only = !spec.legs.empty();
                 return true;
             }
+        }
+        bool overlap = false;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            overlap = live && shares_device(*live, spec);
+            pending = spec;
+        }
+        if (overlap) {
+            auto held = release();
+            held.reset();
         }
         auto next = open_session(spec, err);
         if (!next)
@@ -414,13 +933,17 @@ struct SourceHost::Impl {
         {
             std::lock_guard<std::mutex> lk(mu);
             if (live && same_request(*live, spec)) {
+                if (!spec.legs.empty())
+                    apply_gains(*live, spec);
+                pending = spec;
                 already = true;
+                gains_only = !spec.legs.empty();
                 old = std::move(next);
             } else {
                 switched = static_cast<bool>(live);
                 old = std::move(live);
                 live = std::move(next);
-                pending = spec.input;
+                pending = spec;
             }
             if (old)
                 dropped = old->ring;
@@ -456,6 +979,10 @@ struct SourceHost::Impl {
         if (!ring)
             return -1;
         const size_t want = static_cast<size_t>(max_frames) * k_channels;
+        if (wait_ms < 0)
+            wait_ms = 0;
+        if (wait_ms > 5000)
+            wait_ms = 5000;
         std::unique_lock<std::mutex> lk(ring->mu);
         if (ring->count == 0 && !ring->closed) {
             ring->cv.wait_for(lk, std::chrono::milliseconds(wait_ms), [&] {
@@ -491,6 +1018,7 @@ SourceHost::~SourceHost()
 
 void SourceHost::stop()
 {
+    std::lock_guard<std::mutex> gate(impl_->control);
     auto old = impl_->release();
     old.reset();
 }
@@ -514,33 +1042,60 @@ SourceReply SourceHost::sources()
         {"loopback", devices_json(enumerate_loopback_devices(), "loopback")},
 #if defined(FEATURE_AUDIO_MIX) && FEATURE_AUDIO_MIX
         {"mix", true},
+        {"bus", true},
 #else
         {"mix", false},
+        {"bus", false},
 #endif
     };
     std::lock_guard<std::mutex> lk(impl_->mu);
-    out["current"] = impl_->live ? impl_->live->input : impl_->pending;
+    out["current"] = impl_->live ? impl_->live->input : impl_->pending.input;
     return {200, std::move(out)};
 }
 
-SourceReply SourceHost::start(const nlohmann::json& body)
+bool decode_request(const nlohmann::json& body,
+                    const Spec& pending,
+                    Spec& spec,
+                    std::string& err)
 {
     std::string input;
     std::string mic;
     std::string loopback;
-    std::string err;
     if (!read_fields(body, input, mic, loopback, err))
-        return bad_request(err);
-    if (trim_copy(input).empty()) {
+        return false;
+    if (!parse_leg_list(body, spec.legs, err))
+        return false;
+    if (!spec.legs.empty()) {
+        fill_bus(spec);
+        return true;
+    }
+    if (trim_copy(input).empty() && trim_copy(mic).empty() && trim_copy(loopback).empty()) {
+        if (pending.input.empty() && pending.legs.empty()) {
+            err = "missing input";
+            return false;
+        }
+        spec = pending;
+        return true;
+    }
+    return parse_spec(input, mic, loopback, spec, err);
+}
+
+SourceReply SourceHost::start(const nlohmann::json& body)
+{
+    std::lock_guard<std::mutex> gate(impl_->control);
+    Spec pending;
+    {
         std::lock_guard<std::mutex> lk(impl_->mu);
-        input = impl_->pending;
+        pending = impl_->pending;
     }
     Spec spec;
-    if (!parse_spec(input, mic, loopback, spec, err))
+    std::string err;
+    if (!decode_request(body, pending, spec, err))
         return bad_request(err);
     bool already = false;
     bool switched = false;
-    if (!impl_->start_spec(spec, err, already, switched)) {
+    bool gains_only = false;
+    if (!impl_->start_spec(spec, err, already, switched, gains_only)) {
         log::trace("[audio-source] start failed input=" + spec.input + " err=" + err);
         auto reply = bad_request(err, spec.input);
         std::lock_guard<std::mutex> lk(impl_->mu);
@@ -552,36 +1107,39 @@ SourceReply SourceHost::start(const nlohmann::json& body)
     reply.body["accepted"] = true;
     reply.body["already"] = already;
     reply.body["switched"] = switched;
+    reply.body["gains"] = gains_only;
     return reply;
 }
 
 SourceReply SourceHost::select(const nlohmann::json& body)
 {
-    std::string input;
-    std::string mic;
-    std::string loopback;
-    std::string err;
-    if (!read_fields(body, input, mic, loopback, err))
-        return bad_request(err);
-    Spec spec;
-    if (!parse_spec(input, mic, loopback, spec, err))
-        return bad_request(err);
+    std::lock_guard<std::mutex> gate(impl_->control);
+    Spec pending;
     bool running = false;
     {
         std::lock_guard<std::mutex> lk(impl_->mu);
+        pending = impl_->pending;
         running = static_cast<bool>(impl_->live);
-        if (!running)
-            impl_->pending = spec.input;
+    }
+    Spec spec;
+    std::string err;
+    if (!decode_request(body, pending, spec, err))
+        return bad_request(err);
+    if (!running) {
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        impl_->pending = spec;
     }
     bool already = false;
     bool switched = false;
-    if (running && !impl_->start_spec(spec, err, already, switched)) {
+    bool gains_only = false;
+    if (running && !impl_->start_spec(spec, err, already, switched, gains_only)) {
         log::trace("[audio-source] switch failed input=" + spec.input + " err=" + err);
         return bad_request(err, spec.input);
     }
     auto reply = status();
     reply.body["accepted"] = true;
     reply.body["switched"] = switched;
+    reply.body["gains"] = gains_only;
     reply.body["stored"] = !running;
     return reply;
 }

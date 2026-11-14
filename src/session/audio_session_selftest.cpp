@@ -1,4 +1,5 @@
 #include "pm/audio/session/audio_session_selftest.hpp"
+#include "pm/audio/session/recorder.hpp"
 
 #include "pm/audio/pcm_record.hpp"
 #include "pm/audio/ring.hpp"
@@ -440,6 +441,9 @@ void check_record(State& st)
     st.expect(later_ok && later_pcm.size() == 2000 && later_pcm[0] == 1 && later_pcm.back() == 2,
               "concurrent push is still in the buffer");
     std::filesystem::remove_all(dir, ec);
+
+    const std::string logic = recorder_logic_checks();
+    st.expect(logic.empty(), "recorder logic", logic);
 }
 
 void check_voice(State& st)
