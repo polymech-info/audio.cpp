@@ -180,9 +180,13 @@ endif()
 
 pm_audio_ensure_miniaudio()
 
-# mixed_capture.cpp is the process capture table. The host compiles it once.
+# Process-global hooks / kbot-backed sessions: the host compiles these once.
+# mixed_capture — capture table. mic_activity — mic busy indicator.
+# translate.cpp needs kbot TranslationSession (FEATURE_REALTIME on the host).
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  list(APPEND PM_AUDIO_SOURCES src/mixed_capture.cpp)
+  list(APPEND PM_AUDIO_SOURCES
+    src/mixed_capture.cpp
+    src/mic_activity.cpp)
 endif()
 
 add_library(pm-audio-lib STATIC ${PM_AUDIO_SOURCES})
