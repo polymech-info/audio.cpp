@@ -8,10 +8,13 @@
 //     mic (AudioInput, 16k) ──resample 24k──▶ TranslationSession::send_pcm
 //     TranslationSession::on_audio_pcm (24k) ──▶ speaker (PCM ring → ma_device)
 //
+// Optional --src WAV replaces the mic with a paced file feeder (battle tests).
 // Host-compiled under FEATURE_REALTIME (needs kbot). Not in the default
 // pm-audio-lib glob — same pattern as mixed_capture / RealtimeVoiceSession.
 
 #if defined(FEATURE_REALTIME) && FEATURE_REALTIME
+
+#include "pm/audio/vad.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -33,6 +36,14 @@ public:
         std::string speaker_device; // substring; empty = default (single device)
         float       mic_gain = 1.0f;
         int         close_drain_timeout_ms = 30000;
+        // simultaneous = play as received; conversational = hold until VAD silence
+        PlaybackMode playback_mode = PlaybackMode::simultaneous;
+        int          silence_ms = 500; // 200..2000 when conversational
+        // Initial jitter lead for each conversational output burst.
+        int          playback_buffer_ms = 3000; // 0..5000
+        // When set, pace this WAV into the session instead of opening the mic.
+        std::string  input_wav;
+        bool         input_loop = false;
     };
 
     struct Callbacks {
@@ -44,6 +55,8 @@ public:
         std::function<void(const std::string&)> on_auth_error;
         std::function<void(const std::string&)> on_network_error;
         std::function<void()>                   on_closed;
+        // Conversational VAD diagnostics (speech_start / speech_end / activity).
+        std::function<void(SpeechEvent, float level, std::size_t held_frames)> on_vad;
     };
 
     RealtimeTranslateSession();
@@ -56,6 +69,8 @@ public:
     void stop();
     void update_language(const std::string& language);
     bool is_active() const;
+    // True when --src finished a non-looping feed (CLI can drain then stop).
+    bool input_exhausted() const;
 
 private:
     struct Impl;

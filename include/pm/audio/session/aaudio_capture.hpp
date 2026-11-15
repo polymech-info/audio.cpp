@@ -20,6 +20,9 @@ struct AAudioStatus {
     bool available = false;
     int opened_id = -1;
     int sample_rate = 0;
+    // Android audio session id for AcousticEchoCanceler / AGC / NS (API 28+).
+    // -1 when unknown or unavailable.
+    int session_id = -1;
     std::int64_t frames = 0;
     std::int64_t dropped = 0;
     // 0..1 mic envelope. Does not consume the capture ring.

@@ -91,6 +91,8 @@ set(PM_AUDIO_SOURCES
   src/stt/windows_ai_stt.cpp
   src/tts/windows_tts.cpp
   src/echo.cpp
+  src/vad.cpp
+  src/vad_gate_selftest.cpp
   src/devices.cpp
   src/pcm_record_buffer.cpp
   src/record_session.cpp
@@ -201,6 +203,11 @@ endif()
 target_include_directories(pm-audio-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(pm-audio-lib PUBLIC cxx_std_20)
 target_link_libraries(pm-audio-lib PUBLIC nlohmann_json::nlohmann_json miniaudio_hdr)
+if(TARGET webrtc_vad)
+  target_compile_definitions(pm-audio-lib PUBLIC HAVE_WEBRTC_VAD=1)
+  target_link_libraries(pm-audio-lib PUBLIC webrtc_vad)
+  message(STATUS "pm-audio-lib: WebRTC VAD linked")
+endif()
 if(WIN32)
   target_link_libraries(pm-audio-lib PUBLIC mfplat mfreadwrite mfuuid)
 endif()

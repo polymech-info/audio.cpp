@@ -386,7 +386,7 @@ int main(int argc, char** argv)
 
     std::string suite = "all";
     auto* selftest = app.add_subcommand("selftest", "Run the in-process session checks");
-    selftest->add_option("--suite", suite, "all, lease, route, event, or graph");
+    selftest->add_option("--suite", suite, "all, lease, route, event, graph, record, voice, vad-gate");
 
     std::string match_text;
     std::string wake;

@@ -31,6 +31,7 @@ struct RecorderStatus {
     bool aec_requested = false;
     bool agc_requested = false;
     bool aec_active = false;
+    int session_id = -1; // AAudio session for platform AcousticEchoCanceler
     std::string filter_note;
     std::int64_t frames_in = 0;
     std::int64_t frames_written = 0;

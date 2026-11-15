@@ -970,8 +970,10 @@ RecorderStatus recorder_start(const RecorderRequest& request)
 
     const bool speech = request.gtcrn || request.aec || request.agc;
     const int file_rate = speech ? k_speech_rate : k_hq_rate;
+    // VOICE_COMMUNICATION when AEC is on so platform AcousticEchoCanceler can bind.
+    const char* preset = request.aec ? "communication" : "recognition";
     const AAudioStatus opened = aaudio_capture_start(
-        request.token, -1, false, "recognition", file_rate);
+        request.token, -1, false, preset, file_rate);
     if (!opened.ok) {
         RecorderStatus denied;
         denied.reason = opened.reason.empty() ? "capture did not start" : opened.reason;
@@ -993,6 +995,7 @@ RecorderStatus recorder_start(const RecorderRequest& request)
         starting.gtcrn_requested = request.gtcrn;
         starting.aec_requested = request.aec;
         starting.agc_requested = request.agc;
+        starting.session_id = opened.session_id;
         eng.publish(starting);
     }
     const int rate = opened.sample_rate > 0 ? opened.sample_rate : file_rate;

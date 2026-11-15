@@ -1,4 +1,5 @@
 #include "pm/audio/session/audio_session_selftest.hpp"
+#include "pm/audio/vad_gate_selftest.hpp"
 #include "pm/audio/session/recorder.hpp"
 
 #include "pm/audio/pcm_record.hpp"
@@ -513,7 +514,7 @@ SelfTestReport run_selftest(std::string_view suite)
 {
     SelfTestReport report;
     if (suite != "all" && suite != "lease" && suite != "route" && suite != "event" && suite != "graph"
-        && suite != "record" && suite != "voice") {
+        && suite != "record" && suite != "voice" && suite != "vad-gate") {
         report.json = "{\"ok\":false,\"function\":\"audio-session\",\"error\":\"unknown suite\"}";
         return report;
     }
@@ -530,6 +531,10 @@ SelfTestReport run_selftest(std::string_view suite)
         check_record(st);
     if (want_suite(suite, "voice"))
         check_voice(st);
+    if (want_suite(suite, "vad-gate")) {
+        const VadGateSelfTestReport vg = run_vad_gate_selftest();
+        st.expect(vg.ok, "vad-gate", vg.detail);
+    }
     report.ok = st.failures.empty();
     report.json = report_json(suite, st);
     return report;

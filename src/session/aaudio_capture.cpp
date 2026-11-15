@@ -72,6 +72,7 @@ struct Api {
     aaudio_result_t (*close)(AAudioStream*) = nullptr;
     int32_t (*getDeviceId)(AAudioStream*) = nullptr;
     int32_t (*getSampleRate)(AAudioStream*) = nullptr;
+    int32_t (*getSessionId)(AAudioStream*) = nullptr; // API 28+
 };
 
 Api& api()
@@ -123,6 +124,7 @@ bool load_api()
     a.close = load<decltype(a.close)>(a.lib, "AAudioStream_close");
     a.getDeviceId = load<decltype(a.getDeviceId)>(a.lib, "AAudioStream_getDeviceId");
     a.getSampleRate = load<decltype(a.getSampleRate)>(a.lib, "AAudioStream_getSampleRate");
+    a.getSessionId = load<decltype(a.getSessionId)>(a.lib, "AAudioStream_getSessionId");
     a.ok = a.create && a.destroy && a.setDirection && a.setDeviceId && a.setSharingMode && a.setFormat
         && a.setChannelCount && a.setSampleRate && a.setDataCallback && a.setErrorCallback
         && a.open && a.requestStart && a.requestStop && a.close && a.getDeviceId;
@@ -141,6 +143,7 @@ struct Stream {
     std::atomic<bool> running{false};
     std::atomic<bool> finished{false};
     int opened_id = -1;
+    int session_id = -1;
     int target_frames = 0;
     int sample_rate = 48000;
     std::atomic<pm::audio::graph::SpscRing*> pcm{nullptr};
@@ -472,6 +475,12 @@ AAudioStatus aaudio_capture_start(std::uint64_t token, int device_id, bool speci
     }
     s.stream = opened.stream;
     s.opened_id = opened.opened_id;
+    s.session_id = -1;
+    if (api().getSessionId && s.stream) {
+        const int32_t sid = api().getSessionId(s.stream);
+        if (sid > 0)
+            s.session_id = sid;
+    }
     s.running.store(true);
 
     AAudioStatus status;
@@ -479,6 +488,8 @@ AAudioStatus aaudio_capture_start(std::uint64_t token, int device_id, bool speci
     status.available = true;
     status.running = true;
     status.opened_id = opened.opened_id;
+    status.session_id = s.session_id;
+    status.sample_rate = s.sample_rate;
     status.reason = "opened device matches";
     return status;
 }
@@ -507,6 +518,7 @@ AAudioStatus aaudio_capture_status()
     status.running = s.running.load() && s.stream != nullptr && !s.lost.load();
     status.device_lost = s.lost.load();
     status.opened_id = s.opened_id;
+    status.session_id = s.session_id;
     status.frames = s.frames.load();
     status.level = s.envelope.load(std::memory_order_relaxed) / 32768.f;
     status.sample_rate = s.sample_rate;

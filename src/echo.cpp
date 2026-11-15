@@ -35,7 +35,7 @@ EchoCancellationProcessor::EchoCancellationProcessor(Config cfg)
     const ApmBackend& backend = backend_slot();
     handle_ = backend.create(cfg_.sample_rate_hz, cfg_.channels, cfg_.agc, cfg_.ns);
     active_ = handle_ && backend.active && backend.active(handle_);
-    backend_ = active_ ? "webrtc_apm" : "none";
+    backend_ = active_ ? "apm" : "none";
     if (active_)
         pm::audio::log::info(std::string("[audio] echo cancellation active: ") + backend_);
 }
