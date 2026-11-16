@@ -4,7 +4,7 @@
 **Date:** 2026-11-15  
 **Status:** Living design and roadmap. The one-device realtime translation
 path exists; bidirectional routing, soft-paired multi-device media and the
-scenarios in sections 17–18 remain future work.
+scenarios in sections 18–19 remain future work.
 
 ## 1. Objective
 
@@ -324,7 +324,155 @@ Instrument timestamps for capture, VAD onset/end, send, first translation text, 
 6. **Android cold-start and device routes matter.** No blocking Whisper startup or unbounded JNI/audio work.
 7. **Privacy and API cost matter.** Continuous streaming, silence cadence, optional second session and retained audio should be measured and disclosed.
 
-## 17. Future deployment scenarios
+## 17. Output artifacts and export options
+
+Live playback, recording and export are separate concerns. Enabling playback
+must not implicitly retain audio, and enabling recording must state exactly
+which stage is saved.
+
+### 17.1 Available audio products
+
+| Output | Contents | Primary use |
+|---|---|---|
+| Source raw | Device capture before AEC/NS/gain | DSP investigation; explicit diagnostic consent only |
+| Source clean | PCM after local AEC/NS/gain, before provider resampling | Normal source-language recording |
+| Source speech-trimmed | Clean source with non-speech removed and a time map | Review, datasets, compact archive |
+| Translation provider | Decoded provider PCM before jitter buffering, gain or route conversion | Provider comparison and debugging |
+| Translation rendered | Samples actually submitted to the output device, including inserted silence and local processing | Truth for what the listener heard and AEC reference |
+| Translation speech-trimmed | Rendered translation with leading/trailing/inter-turn silence removed | Compact listening/export |
+| Bilingual mix | Source and rendered translation arranged sequentially or on separate channels | Human review and sharing |
+| Per-utterance clips | Stable source/translation clip pairs keyed by utterance ID | Replay, correction and dataset export |
+
+Do not label provider PCM as “played audio.” It may include continuous silence,
+late packets or samples that overflowed/never reached the device. The rendered
+tap is authoritative for playback history.
+
+Raw source is more privacy-sensitive and usually unnecessary. Default recording,
+when enabled, should be **source clean** plus metadata. Provider and rendered
+translation are opt-in outputs.
+
+### 17.2 Text and subtitle products
+
+| Output | Timing basis | Notes |
+|---|---|---|
+| Source transcript | Capture/VAD timeline | Provider deltas are provisional until the utterance closes |
+| Translated transcript | Provider output timeline | Keep delta text separate from stable utterance text |
+| Bilingual transcript | Shared utterance IDs | Source and translation side by side |
+| Source subtitles | Source utterance start/end | SRT/VTT; word timing only when the STT backend provides it |
+| Translation subtitles | Actual render start/end | Must follow rendered audio, not network arrival |
+| Bilingual subtitles | Source and rendered timelines | Separate tracks preferred; stacked cues optional |
+| Event JSONL | Monotonic event timeline | Lossless machine-readable source for regeneration |
+
+SRT cannot represent revisions, confidence, device identity or multiple clocks.
+Keep JSONL/manifest as the canonical export and derive SRT/VTT after the session.
+Never rewrite a subtitle cue that has already been presented as final without
+recording the revision.
+
+Suggested event records include:
+
+- room/session generation, device and direction;
+- utterance ID and source/translation relationship;
+- capture start/end, provider first/last delta, queue and render start/end;
+- source/translated text, language and confidence;
+- audio artifact path, sample range and original-to-trimmed time-map range;
+- interruption, truncation, overflow, reconnect and user-correction markers.
+
+### 17.3 Trimming and timeline preservation
+
+“Trimmed” must be explicit:
+
+- **Edge trim:** remove only leading/trailing silence from a file or utterance.
+- **Speech compact:** remove internal non-speech intervals.
+- **Conversation compact:** preserve turn gaps up to a configured maximum and
+  shorten longer gaps.
+- **No trim:** preserve real elapsed time for forensic replay and subtitle sync.
+
+Do not destructively trim the only recording. Write a derivative and retain a
+time map:
+
+```text
+original_start_ns, original_end_ns
+trimmed_start_sample, trimmed_end_sample
+reason = leading_silence | vad_gap | playback_silence | dropped_provider_silence
+```
+
+For translated output, provider-generated digital silence may be omitted before
+queueing. That is transport cleanup, not an editing decision; count it in the
+manifest. Silence intentionally rendered for pacing remains part of the
+untrimmed rendered artifact.
+
+### 17.4 Containers and layouts
+
+- WAV: one PCM stream; good for source-clean, rendered translation or a clip.
+- FLAC: lossless compact archive where the platform encoder is available.
+- Opus/Ogg: shareable speech output and peer-media capture; lossy.
+- MKA/MKV: preferred future session package for multiple synchronized audio and
+  subtitle tracks.
+- SRT/VTT: derived human subtitle formats.
+- JSONL + JSON manifest: canonical metadata, event and provenance output.
+
+A bilingual stereo WAV (`source=L`, `translation=R`) is convenient but does not
+model different clocks, sample rates or overlapping devices well. Prefer
+separate tracks in a session container or separate files plus a manifest.
+
+### 17.5 Proposed option surface
+
+Avoid a boolean for every artifact. Use repeatable output selectors plus focused
+format/trim options:
+
+```text
+--output source-clean=source.wav
+--output translated-rendered=translated.wav
+--output subtitles-bilingual=session.vtt
+--output events=session.jsonl
+--output manifest=session.json
+--trim none|edges|speech|conversation
+--trim-max-gap-ms 1500
+--audio-format wav|flac|opus
+--subtitle-format srt|vtt|jsonl
+```
+
+Equivalent Android settings should be presets, not a wall of checkboxes:
+
+- **Nothing saved** (default for live-only use);
+- **Transcript only**;
+- **Source + transcript**;
+- **Source and translation**;
+- **Full session package** (advanced/debug).
+
+An explicit advanced screen may customize tracks, trimming, codec and retention.
+CLI test inputs such as `--src`, loop and timed cancellation are not recording
+outputs.
+
+### 17.6 Suggested presets
+
+| Preset | Artifacts |
+|---|---|
+| Private live | Nothing persisted |
+| Meeting notes | Bilingual transcript, VTT, manifest |
+| Review | Source clean, rendered translation, bilingual transcript, manifest |
+| Compact share | Speech-trimmed translation, translated subtitles |
+| Dataset | Per-utterance clean source/translation pairs, JSONL, time maps and consent record |
+| Diagnostic | Raw + clean source, provider + rendered translation, events, metrics and manifest |
+| Multi-device room | One track per device/direction plus peer transport/render timestamps |
+
+### 17.7 Output TODOs
+
+- [ ] Define `OutputSpec`, artifact kinds and retention/consent in shared C++.
+- [ ] Add taps for raw capture, clean capture, provider output and actual render;
+  keep file I/O off audio callbacks.
+- [ ] Persist stable utterance IDs and original/rendered monotonic timestamps.
+- [ ] Implement lossless JSONL/manifest first, then derive SRT/VTT.
+- [ ] Add edge trimming with a reversible time map; benchmark speech compaction
+  separately from live VAD.
+- [ ] Add bounded writer queues, disk-full handling and partial-artifact status.
+- [ ] Add per-utterance source/translation clip export without re-encoding when
+  the selected container permits it.
+- [ ] Add MKA/MKV multi-track packaging after separate-track exports are stable.
+- [ ] Apply two-party consent and per-device provenance to softly paired rooms.
+- [ ] Test that disabled recording creates no recoverable audio artifact.
+
+## 18. Future deployment scenarios
 
 The single shared phone remains the first supported topology. Multi-device
 operation is a separate transport and coordination problem; it must not be
@@ -354,7 +502,7 @@ Captions and state events may appear on both devices. Audio has one elected
 renderer per direction. Optional local monitoring is a separate, explicit
 accessibility setting and must not create duplicate room playback.
 
-### 17.1 Tanit soft pairing
+### 18.1 Tanit soft pairing
 
 A **soft pair** is a short-lived association for one translation room. It is
 not permanent account trust, speaker identity, or permission to expose all
@@ -386,7 +534,7 @@ mute, route state, utterance metadata and health. The media plane carries
 audio. Do not tunnel live PCM through chat SSE, tool calls, log shipping, VFS,
 or the desktop REST control path.
 
-### 17.2 Media transport and packet contract
+### 18.2 Media transport and packet contract
 
 Prefer an existing encrypted real-time media transport (WebRTC
 DTLS-SRTP/Opus, with STUN/TURN when required) over polling HTTP or a custom
@@ -412,7 +560,7 @@ clocks match. A reconnect creates a new generation/stream ID. Late packets from
 an old generation are discarded. Never replay queued speech after reconnect
 without visible user action.
 
-### 17.3 Routing and floor control
+### 18.3 Routing and floor control
 
 The room coordinator owns a small routing state machine, not the provider
 session:
@@ -437,7 +585,7 @@ still has an independent stream, jitter buffer and provider session. Full
 duplex is enabled only after route capability checks; it is not inferred merely
 because two phones joined.
 
-### 17.4 Nearby-phone acoustic-loop constraint
+### 18.4 Nearby-phone acoustic-loop constraint
 
 Two phones on a table are harder than one phone. Each phone can cancel its own
 speaker using its local render reference, but phone A cannot reliably cancel
@@ -457,7 +605,7 @@ Therefore:
 6. Never solve a loop by allowing an unbounded mute or queue. Reopen, degrade
    to push-to-talk, or stop with an actionable error.
 
-### 17.5 Ownership, recovery and UX
+### 18.5 Ownership, recovery and UX
 
 - One device is room coordinator; either peer can take over using a higher
   room generation after coordinator loss.
@@ -473,7 +621,7 @@ Therefore:
 - Both phones expose mute, leave, route selection, peer health and latency.
   Recording requires consent from both room members and records provenance.
 
-## 18. Multi-device TODOs
+## 19. Multi-device TODOs
 
 ### M0 — Contracts and deterministic simulation
 
@@ -547,7 +695,49 @@ Therefore:
 | Phones sit close at high volume | Loop detector warns/degrades before repeated translation runs away |
 | Recording enabled | Both users consent; artifacts identify direction/device and can be deleted |
 
-## 19. References
+## 20. Android app feature gap
+
+Checked against Google Translate, Microsoft Translator, iTranslate, DeepL, SayHi,
+Papago, Timekettle, Wooask, and Vasco MultiTalk. Tanit should not copy camera,
+dictionary, or phrasebook products. The relevant gap is conversation routing.
+
+Already on the phone:
+
+- One live speech-to-speech session, Tanit or OpenAI.
+- Simultaneous and conversational playback, silence time, and jitter buffer.
+- Near-field / far-field noise reduction, AEC, and half-duplex during playout.
+- Live source and translated text, copy, lock-screen session.
+- Optional source WAV and transcribe-after-stop.
+- Target language, router, and model.
+
+| Feature other apps already ship | Who | Fit for Tanit |
+|---|---|---|
+| Face the other person: split or flipped screen | Google, Microsoft, iTranslate | High. One phone, two readers, no second device |
+| Each person uses their own phone and language | Microsoft, Vasco | High. This is the soft-pair room |
+| Join by QR or short code, including a browser | Microsoft | High. Do not require the Tanit app for a guest |
+| Presenter: one speaker, many listeners, captions only | Microsoft, Timekettle listen mode | High. No spoken playback in the room |
+| Replay the last turn, slower or louder | iTranslate, planned whistle commands | High. Needs a completed-utterance buffer |
+| Save and export the bilingual conversation | Timekettle, Wooask | High. Use the output contract in section 17 |
+| Type when the room is too loud | Microsoft, Google | Medium. Same translation session, text instead of PCM |
+| Headphones hear the translation; the room does not | Google Live Translate, Timekettle earbuds | Medium. A route preset, not a new translator |
+| Ordinary Bluetooth earbuds as the private output | Wooask | Medium. Same route preset; do not claim earbud AEC |
+| Auto-detect who is speaking and flip direction | Google Conversation | Later. Unsafe on one mic until direction confidence exists |
+| Group chat, each member picks a language | Vasco, Microsoft | Later. Same room model, more than two peers |
+| Offline speech | Google text/camera packs; Wooask for a few pairs | Later. Text packs are not a spoken translator |
+| Camera, menus, documents, handwriting | Google, DeepL, iTranslate | Out of scope for this audio session |
+| Translated phone calls | Timekettle | Out of scope. Android cannot take the call audio |
+| Cloned voice | Newer voice-translator apps | Out of scope until a voice-consent design exists |
+
+First additions that match the current app, in order:
+
+1. Split view on one phone, with the far side flipped.
+2. Captions-only mode, for a lecture or a noisy table.
+3. Replay and slower playback of the last completed turn.
+4. Text fallback into the same session.
+5. Guest join by QR or short code, captions first and audio second.
+6. Headphone route that keeps translated speech out of the room mic.
+
+## 21. References
 
 - OpenAI Realtime Translation guide: https://developers.openai.com/api/docs/guides/realtime-translation
 - OpenAI translation client events (update, PCM append, close): https://developers.openai.com/api/reference/resources/realtime/translation-client-events
