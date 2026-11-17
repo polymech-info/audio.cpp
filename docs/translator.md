@@ -1,10 +1,43 @@
 # Tanit Android — Real-Time Translator
 
 **Engineering handover / implementation plan**  
-**Date:** 2026-11-15  
-**Status:** Living design and roadmap. The one-device realtime translation
-path exists; bidirectional routing, soft-paired multi-device media and the
-scenarios in sections 18–19 remain future work.
+**Date:** 2026-11-16  
+**Status:** Living design and roadmap. The one-device path below is what the
+CLI and the phone run today. Bidirectional routing, soft-paired multi-device
+media, and the scenarios in sections 18–19 remain future work.
+
+### Implemented now
+
+Two device backends, one session:
+
+| | Desktop | Phone |
+|---|---|---|
+| Capture / playback | miniaudio mic and speaker FIFO (`packages/audio.cpp/src/translate.cpp`) | AAudio capture, SPSC ring, AudioTrack pull (`src/android/pm_android_translate.cpp`) |
+| Provider | `TranslationSession` → `/v1/realtime/translations` | same |
+| Playback gate | `TranslatePlaybackGate` | same |
+| Digital-silence drop | `model_pcm_level` in `translate_policy.hpp` (peak ≤ 32 and RMS ≤ 4) | same |
+
+Conversational playback holds translated PCM until local VAD `speech_end`, then
+plays it after `--playback-buffer-ms` (0–5000, default 3000). That lead is not
+re-armed while audio was rendered in the last 500 ms. Half-duplex sends silence
+upstream while translated audio is queued or was just rendered. A user turn
+that already started keeps its mic frames until `speech_end`. The hold buffer
+keeps the newest 60 s. There is no packet-duration play lock.
+
+A language change is `session.update` on the open socket. The first
+`session.updated` and each later switch log `warmup_ms`. The phone title shows
+`Switching to …` until that event, then `Live · <language> · ready`. The
+recording stays one source WAV.
+
+Transcript deltas are concatenated with a space when two word fragments would
+otherwise glue. Whitespace-only deltas are kept. `*.transcript.done` replaces
+the in-progress utterance, which is where punctuation arrives.
+
+Phone stop sets `Stopping…` immediately and finishes the socket on a worker,
+with a 2 s cap. It does not block the UI on the 30 s drain.
+
+CLI examples, including `--switch-lang` and `--playback-buffer-ms`, are in
+`releases/web-docs/cli/audio_translate_examples.md`.
 
 ## 1. Objective
 
@@ -119,14 +152,19 @@ Maintain states such as `IDLE -> MAYBE_SPEECH -> SPEAKING -> MAYBE_END -> ENDED`
 
 **B. Gate *source input*:** collect the source utterance locally and send it afterward. Not the initial design: burst-feeding the service compresses the apparent timing, while stopping appends during gaps removes silence. If tested, pace audio at real-time rate and include real silence, accepting additional latency. Prefer the text-first backend for truly utterance-committed behavior.
 
-Playback policy:
+Playback policy shipped on both backends:
 
-- Start playback after VAD end only if translated output is available; otherwise show `Translating…` and start when it arrives.
-- Once opened, drain live translation deltas; don't wait for a guaranteed utterance-complete event (none is documented).
-- Re-arm carefully for the next source turn; avoid stitching output from two directions into one audio stream.
-- Queue translated PCM with session ID, received timestamp and local inferred utterance association; mark the latter as *best-effort*.
-- Use a bounded queue, backlog telemetry and an explicit overload behavior (notify and degrade to immediate/caption-only mode). Never silently truncate a spoken translation.
-- Separate *provisional subtitle*, *stable/committed transcript*, and *audio already played*. Display can be revised; spoken audio cannot be retracted.
+- Start the conversational burst after VAD `speech_end`, after the jitter lead. Simultaneous mode uses about 200 ms.
+- Do not estimate playout from packet size. Mute the uplink from the host queue and from a 500 ms hangover after the last rendered frame.
+- Keep feeding a turn that started before playout, until `speech_end`. Ignore new onsets while the speaker path is active.
+- Drop provider digital silence before it enters the queue.
+- The hold cap is 60 s and keeps the newest tail. Overflow is logged. Do not drop audio because a local timer expired.
+- `session.output_transcript.done` / `session.input_transcript.done` are the punctuated utterance. Deltas before that are provisional and may be revised.
+
+Still design, not shipped:
+
+- Queue translated PCM with session ID, received timestamp and a best-effort utterance id.
+- On overload, notify and degrade to captions. Do not pretend the subtitles are live when the queue is behind.
 
 ## 6. Two-way language direction
 
@@ -255,12 +293,19 @@ Expose Kotlin state/events only: `Idle`, `Listening`, `SpeechDetected`, `Transla
 
 ## 13. UI: compact mini-app
 
-- Large **DE ↔ ES** language selector and reverse button.
-- Conversation feed showing original and translation, speaker A/B/unknown only when confidence is meaningful.
-- One obvious Listen/Pause control; playback, repeat and mute.
-- Mode toggle: **Instant / Conversation / Accurate**.
-- Advanced drawer: VAD silence slider (200–1200 ms), automatic direction, optional speaker tracking, preferred provider, volume and recording.
-- Show current direction as a strong state indicator; a manual/whistle override should take effect predictably at the next safe boundary.
+Shipped on the phone:
+
+- Target language, router, model, noise, playback, silence (200–2000 ms), and jitter buffer (0–5000 ms) in grouped settings. Save writes the sheet.
+- Favourite languages sit under the level meter and call `update_language` on the live session.
+- The title shows `Switching to …` and then `Live · <language> · ready`.
+- Stop shows `Stopping…` immediately.
+- Source and translated text, copy, lock-screen session, optional source WAV, transcribe-after-stop.
+
+Still design:
+
+- Large **DE ↔ ES** reverse control and automatic direction.
+- Speaker A/B/unknown only when confidence is meaningful.
+- Replay, slower playback, and captions-only.
 - If streaming cannot keep pace, show `Translation delayed` rather than pretending subtitles are live.
 
 ## 14. Delivery plan
@@ -703,11 +748,13 @@ dictionary, or phrasebook products. The relevant gap is conversation routing.
 
 Already on the phone:
 
-- One live speech-to-speech session, Tanit or OpenAI.
+- One live speech-to-speech session, Tanit or OpenAI. Language changes stay on that socket.
 - Simultaneous and conversational playback, silence time, and jitter buffer.
 - Near-field / far-field noise reduction, AEC, and half-duplex during playout.
-- Live source and translated text, copy, lock-screen session.
-- Optional source WAV and transcribe-after-stop.
+- Live source and translated text, with `transcript.done` as the punctuated line. Copy.
+- Lock-screen session, stop feedback, and a ready state after `session.updated`.
+- Favourite languages under the level meter.
+- Optional source WAV (one file across a language change) and transcribe-after-stop.
 - Target language, router, and model.
 
 | Feature other apps already ship | Who | Fit for Tanit |

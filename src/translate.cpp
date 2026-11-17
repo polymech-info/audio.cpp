@@ -1,4 +1,6 @@
-// translate.cpp — RealtimeTranslateSession: mic/WAV + speaker + kbot TranslationSession.
+// translate.cpp — miniaudio backend for live translation.
+// Capture, resample, and the speaker FIFO live here. Silence detection,
+// the playback gate, and transcript joining are shared with the AAudio backend.
 // Host-compiled under FEATURE_REALTIME (needs kbot). See pm/audio/translate.hpp.
 
 #include "pm/audio/translate.hpp"
@@ -14,6 +16,7 @@
 #endif
 
 #include "pm/audio/constants.hpp"
+#include "pm/audio/translate_policy.hpp"
 #include "pm/audio/devices.hpp"
 #include "pm/audio/log.hpp"
 #include "pm/audio/mic_activity.hpp"
@@ -40,9 +43,6 @@ namespace {
 constexpr int kMicRate = static_cast<int>(constants::k_capture_sample_rate);
 constexpr int kRtRate  = static_cast<int>(constants::k_realtime_sample_rate);
 constexpr size_t kPlaybackPrebufFrames = static_cast<size_t>(kRtRate) / 5; // 200 ms
-constexpr int kModelSilencePeak = 32;
-constexpr double kModelSilenceRms = 4.0;
-
 bool icontains(const std::string& haystack, const std::string& needle) {
     if (needle.empty()) return true;
     auto it = std::search(
@@ -388,21 +388,13 @@ struct RealtimeTranslateSession::Impl {
     void on_model_pcm(const int16_t* pcm, size_t frames) {
         if (!pcm || frames == 0)
             return;
-        std::uint64_t sum_sq = 0;
-        int peak = 0;
-        for (size_t i = 0; i < frames; ++i) {
-            const int sample = static_cast<int>(pcm[i]);
-            const int magnitude = sample < 0 ? -sample : sample;
-            peak = std::max(peak, magnitude);
-            sum_sq += static_cast<std::uint64_t>(
-                static_cast<std::int64_t>(sample) * static_cast<std::int64_t>(sample));
-        }
-        const double rms = std::sqrt(
-            static_cast<double>(sum_sq) / static_cast<double>(frames));
         // Realtime translation emits continuous digital silence while we feed
         // silence during half-duplex playout. Do not let that silence keep the
         // speaker FIFO—and therefore the mic mute—alive forever.
-        if (peak <= kModelSilencePeak && rms <= kModelSilenceRms) {
+        const ModelPcmLevel level = model_pcm_level(pcm, frames);
+        const int peak = level.peak;
+        const double rms = level.rms;
+        if (level.silence) {
             model_silent_frames.fetch_add(frames);
             if (!model_silence_logged) {
                 model_silence_logged = true;

@@ -443,12 +443,13 @@ void measure_bands(const std::int16_t* pcm, std::size_t n, std::array<int, 16>& 
 
 struct PcmTap {
     static constexpr std::size_t cap = 16000 * 3;
+    std::size_t limit;
     std::vector<std::int16_t> buf;
     std::size_t read = 0;
     std::size_t count = 0;
 
-    PcmTap()
-        : buf(cap)
+    explicit PcmTap(std::size_t n = cap)
+        : limit(n < 2 ? cap : n), buf(limit)
     {
     }
 
@@ -462,18 +463,18 @@ struct PcmTap {
     {
         if (!pcm || n == 0)
             return;
-        if (n >= cap) {
-            pcm += n - cap;
-            n = cap;
+        if (n >= limit) {
+            pcm += n - limit;
+            n = limit;
             read = 0;
             count = 0;
-        } else if (count + n > cap) {
-            const std::size_t drop = count + n - cap;
-            read = (read + drop) % cap;
+        } else if (count + n > limit) {
+            const std::size_t drop = count + n - limit;
+            read = (read + drop) % limit;
             count -= drop;
         }
-        const std::size_t write = (read + count) % cap;
-        const std::size_t first = std::min(n, cap - write);
+        const std::size_t write = (read + count) % limit;
+        const std::size_t first = std::min(n, limit - write);
         std::memcpy(buf.data() + write, pcm, first * sizeof(std::int16_t));
         if (n > first)
             std::memcpy(buf.data(), pcm + first, (n - first) * sizeof(std::int16_t));
@@ -485,11 +486,11 @@ struct PcmTap {
         if (!dst || max == 0 || count == 0)
             return 0;
         const std::size_t n = std::min(max, count);
-        const std::size_t first = std::min(n, cap - read);
+        const std::size_t first = std::min(n, limit - read);
         std::memcpy(dst, buf.data() + read, first * sizeof(std::int16_t));
         if (n > first)
             std::memcpy(dst + first, buf.data(), (n - first) * sizeof(std::int16_t));
-        read = (read + n) % cap;
+        read = (read + n) % limit;
         count -= n;
         return n;
     }
@@ -520,9 +521,12 @@ struct Engine {
     std::atomic<bool> want_aec{false};
     std::atomic<bool> want_agc{false};
     std::atomic<bool> tap_on{false};
+    std::atomic<bool> play_on{false};
     std::atomic<bool> worker_done{true};
     std::mutex tap_mu;
+    std::mutex play_mu;
     PcmTap tap;
+    PcmTap play{48000 * 4};
     std::thread worker;
 
     RecorderStatus copy()
@@ -557,6 +561,28 @@ struct Engine {
     {
         std::lock_guard<std::mutex> lock(tap_mu);
         tap.clear();
+    }
+
+    void play_push(const std::int16_t* pcm, std::size_t n)
+    {
+        if (!pcm || n == 0 || !play_on.load(std::memory_order_relaxed))
+            return;
+        std::lock_guard<std::mutex> lock(play_mu);
+        if (!play_on.load(std::memory_order_relaxed))
+            return;
+        play.push(pcm, n);
+    }
+
+    std::size_t play_pull(std::int16_t* dst, std::size_t max)
+    {
+        std::lock_guard<std::mutex> lock(play_mu);
+        return play.pull(dst, max);
+    }
+
+    void play_clear()
+    {
+        std::lock_guard<std::mutex> lock(play_mu);
+        play.clear();
     }
 
     void run(int opened_rate, int file_rate, std::string path, std::string model, std::uint64_t token)
@@ -649,6 +675,8 @@ struct Engine {
             if (!wav.write(pcm, n))
                 return false;
             local.frames_written += static_cast<std::int64_t>(n);
+            if (play_on.load(std::memory_order_relaxed))
+                play_push(pcm, n);
             if (tap_on.load(std::memory_order_relaxed)) {
                 if (!tap_live) {
                     tap_rate.reset(file_rate, k_speech_rate);
@@ -985,6 +1013,7 @@ RecorderStatus recorder_start(const RecorderRequest& request)
     eng.want_aec.store(request.aec, std::memory_order_relaxed);
     eng.want_agc.store(request.agc, std::memory_order_relaxed);
     eng.tap_clear();
+    eng.play_clear();
     {
         RecorderStatus starting;
         starting.ok = true;
@@ -1044,6 +1073,7 @@ RecorderStatus recorder_stop()
     eng.worker_done.store(true, std::memory_order_release);
     eng.stop.store(false, std::memory_order_relaxed);
     eng.tap_clear();
+    eng.play_clear();
     RecorderStatus status = eng.copy();
     if (status.reason.empty())
         status.reason = "saved";
@@ -1070,6 +1100,22 @@ void recorder_tap(bool on)
 std::size_t recorder_pull_pcm(std::int16_t* dst, std::size_t max_samples)
 {
     return engine().tap_pull(dst, max_samples);
+}
+
+void recorder_play(bool on)
+{
+    Engine& eng = engine();
+    if (!on) {
+        eng.play_on.store(false, std::memory_order_release);
+        eng.play_clear();
+        return;
+    }
+    eng.play_on.store(true, std::memory_order_release);
+}
+
+std::size_t recorder_play_pull(std::int16_t* dst, std::size_t max_samples)
+{
+    return engine().play_pull(dst, max_samples);
 }
 
 std::string recorder_logic_checks()
