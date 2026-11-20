@@ -5,42 +5,68 @@
     "title": "pm-audio",
     "locale": "en",
     "quality_profile": "showcase",
-    "viewBox": [1180, 540],
+    "viewBox": [1120, 640],
     "views": [
-      { "id": "host", "label": "Host and library", "focus": ["host", "hooks", "lib"], "note": "The host keeps settings and one miniaudio implementation. The library takes PCM, models, and keys in." },
-      { "id": "runtime", "label": "Capture path", "focus": ["lib", "session", "devices", "record"], "note": "A lease token is required before a device opens. Echo stays dry until the host installs WebRTC." },
-      { "id": "speech", "label": "Speech and filters", "focus": ["lib", "voice", "speech", "filters", "elevenlabs"], "note": "Whisper, VibeVoice, WinRT, MOSS, and the denoisers compile or load only when the parent already has them." }
+      {
+        "id": "hosts",
+        "label": "Hosts",
+        "focus": ["desktop", "android", "server", "lib"],
+        "note": "Desktop and Android both link pm-audio-lib. Only the desktop listener compiles node_audio."
+      },
+      {
+        "id": "pipe",
+        "label": "LAN pipe",
+        "focus": ["android", "server", "endpoints", "devices"],
+        "note": "The phone calls /v1/audio on the desktop. Live voice PCM stays on the phone."
+      },
+      {
+        "id": "library",
+        "label": "Library",
+        "focus": ["lib", "session", "devices", "voice", "speech"],
+        "note": "The library still has no settings store. The APK turns the C++ speech clients off."
+      }
     ]
   },
   "components": [
-    { "id": "host", "type": "frontend", "label": "Host", "sublabel": "Tanit · pm-audio CLI", "pos": [30, 200], "size": [170, 64] },
-    { "id": "hooks", "type": "external", "label": "Host installers", "sublabel": "log · gates · plugins", "pos": [30, 380], "size": [170, 64] },
-    { "id": "lib", "type": "backend", "label": "pm-audio-lib", "sublabel": "pm::audio", "tag": "no settings", "pos": [280, 200], "size": [170, 64] },
-    { "id": "session", "type": "security", "label": "Session", "sublabel": "lease · route · ring", "pos": [530, 60], "size": [180, 60] },
-    { "id": "devices", "type": "backend", "label": "Devices", "sublabel": "miniaudio · AAudio", "pos": [530, 200], "size": [180, 64] },
-    { "id": "voice", "type": "backend", "label": "Voice pipeline", "sublabel": "VAD · wake · adapters", "pos": [530, 360], "size": [180, 60] },
-    { "id": "speech", "type": "backend", "label": "Speech engines", "sublabel": "Whisper · WinRT · VibeVoice", "pos": [800, 120], "size": [190, 60] },
-    { "id": "filters", "type": "backend", "label": "Denoise", "sublabel": "DeepFilter · GTCRN", "pos": [800, 280], "size": [190, 60] },
-    { "id": "record", "type": "database", "label": "Record", "sublabel": "PCM · WAV · AAC · session file", "pos": [800, 420], "size": [190, 60] },
-    { "id": "elevenlabs", "type": "cloud", "label": "ElevenLabs", "sublabel": "STT · TTS", "pos": [1020, 120], "size": [120, 60] }
+    { "id": "desktop", "type": "frontend", "label": "Desktop host", "sublabel": "Tanit · CLI", "pos": [36, 70], "size": [180, 68] },
+    { "id": "android", "type": "frontend", "label": "Android host", "sublabel": "JNI · Kotlin", "pos": [36, 280], "size": [180, 68] },
+    { "id": "server", "type": "backend", "label": "node_audio", "sublabel": "server.cpp", "tag": "desktop only", "pos": [36, 500], "size": [180, 68] },
+    { "id": "lib", "type": "backend", "label": "pm-audio-lib", "sublabel": "pm::audio", "tag": "no settings", "pos": [310, 200], "size": [190, 72] },
+    { "id": "endpoints", "type": "backend", "label": "SourceHost", "sublabel": "SinkHost · /v1/audio", "pos": [310, 500], "size": [190, 68] },
+    { "id": "session", "type": "security", "label": "Session", "sublabel": "lease · route · ring", "pos": [590, 70], "size": [200, 64] },
+    { "id": "voice", "type": "backend", "label": "Voice pipeline", "sublabel": "desktop adapters", "pos": [590, 230], "size": [200, 64] },
+    { "id": "speech", "type": "backend", "label": "Speech engines", "sublabel": "off in the APK", "pos": [880, 150], "size": [200, 64] },
+    { "id": "devices", "type": "backend", "label": "Devices", "sublabel": "miniaudio · AAudio", "pos": [590, 500], "size": [200, 64] }
   ],
   "boundaries": [
-    { "kind": "region", "label": "pm-audio-lib", "wraps": ["lib", "session", "devices", "voice", "speech", "filters", "record"] }
+    { "kind": "region", "label": "pm-audio-lib", "wraps": ["lib", "endpoints", "session", "devices", "voice", "speech"] }
   ],
   "connections": [
-    { "id": "host-lib", "from": "host", "to": "lib", "label": "link", "variant": "emphasis" },
-    { "id": "hooks-lib", "from": "hooks", "to": "lib", "fromSide": "right", "toSide": "bottom", "label": "set_*", "variant": "dashed" },
-    { "id": "lib-session", "from": "lib", "to": "session", "fromSide": "top", "toSide": "left" },
-    { "id": "lib-devices", "from": "lib", "to": "devices" },
-    { "id": "lib-voice", "from": "lib", "to": "voice", "fromSide": "bottom", "toSide": "left" },
+    { "id": "desktop-lib", "from": "desktop", "to": "lib", "label": "link", "variant": "emphasis" },
+    { "id": "android-lib", "from": "android", "to": "lib", "label": "link", "variant": "emphasis" },
+    { "id": "android-server", "from": "android", "to": "server", "label": "/v1/audio", "variant": "dashed", "labelAt": [126, 420] },
+    { "id": "server-endpoints", "from": "server", "to": "endpoints", "label": "mounts" },
+    { "id": "lib-session", "from": "lib", "to": "session" },
+    { "id": "lib-voice", "from": "lib", "to": "voice" },
     { "id": "lib-speech", "from": "lib", "to": "speech" },
-    { "id": "lib-filters", "from": "lib", "to": "filters", "fromSide": "right", "toSide": "left" },
-    { "id": "lib-record", "from": "lib", "to": "record", "fromSide": "bottom", "toSide": "left" },
-    { "id": "speech-eleven", "from": "speech", "to": "elevenlabs", "label": "HTTPS" }
+    { "id": "lib-devices", "from": "lib", "to": "devices" },
+    { "id": "endpoints-devices", "from": "endpoints", "to": "devices", "label": "open", "labelAt": [512, 478] }
   ],
   "cards": [
-    { "dot": "cyan", "title": "Library, not an app", "items": ["No settings store and no model download. The host passes paths, keys, and policy."] },
-    { "dot": "rose", "title": "One device owner", "items": ["Capture and playback need a live lease token. One miniaudio implementation lives in the final binary."] },
-    { "dot": "violet", "title": "Engines stay optional", "items": ["Whisper, ONNX, VibeVoice, and WinRT are used when the parent already has them. DeepFilter and MOSS load as DLLs."] }
+    {
+      "dot": "cyan",
+      "title": "Two hosts",
+      "items": ["Desktop and Android both link pm-audio-lib. The APK leaves speech clients off and compiles GTCRN live."]
+    },
+    {
+      "dot": "rose",
+      "title": "Desktop routes",
+      "items": ["node_audio mounts SourceHost and SinkHost. The phone image does not compile these routes."]
+    },
+    {
+      "dot": "violet",
+      "title": "Clock trial",
+      "items": ["Speech and the phone mic. The pipe does not call it. The desktop is the master."]
+    }
   ]
 }

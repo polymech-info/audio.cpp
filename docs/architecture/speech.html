@@ -5170,8 +5170,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="gates" data-edge-to="factory" data-edge-label="install" data-edge-key="8" data-edge-id="gates-factory" data-composition-points="110,400;110,284" d="M 110 400 L 110 284" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
 
         <!-- Components -->
-        <g id="node-factory" data-node-id="factory" data-node-label="speech_factory" tabindex="0" role="button" aria-label="Focus speech_factory, stays on the host, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="stays on the host" data-node-context="Architecture component">
-          <title>speech_factory · stays on the host · Architecture component</title>
+        <g id="node-factory" data-node-id="factory" data-node-label="speech_factory" tabindex="0" role="button" aria-label="Focus speech_factory, desktop host, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="desktop host" data-node-context="Architecture component">
+          <title>speech_factory · desktop host · Architecture component</title>
           <rect x="30" y="220" width="160" height="64" rx="6" class="c-mask"/>
           <rect x="30" y="220" width="160" height="64" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(36 226) scale(0.6875)">
@@ -5181,7 +5181,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="110" y="250" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">speech_factory</text>
-        <text data-detail="context" x="110" y="266" class="t-muted" font-size="9" text-anchor="middle">stays on the host</text>
+        <text data-detail="context" x="110" y="266" class="t-muted" font-size="9" text-anchor="middle">desktop host</text>
         </g>
 
         <g id="node-stt" data-node-id="stt" data-node-label="STT" tabindex="0" role="button" aria-label="Focus STT, package engines, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="package engines" data-node-context="Architecture component">
@@ -5525,7 +5525,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>Host still chooses</h3>
         </div>
         <ul>
-          <li>&bull; speech_factory maps CLI flags and settings onto option structs. Proxy STT and TTS stay out of this library.</li>
+          <li>&bull; speech_factory maps desktop flags onto option structs. Proxy STT and TTS stay out of this library. The APK sets PM_AUDIO_SPEECH_CLIENTS off and uses the Kotlin speech client.</li>
         </ul>
       </div>
 

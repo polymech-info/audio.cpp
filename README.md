@@ -11,21 +11,27 @@ The library does not store settings and does not download models. Optional engin
 
 Interactive copies are in [docs/architecture](docs/architecture/architecture.md).
 
-The host links `pm-audio-lib` and installs the hooks this library cannot see (log, allow-gates, plugin tables, echo cancellation). ElevenLabs is the engine that leaves the machine.
+Desktop Tanit, the `pm-audio` CLI, and the Android app link `pm-audio-lib`. `packages/server.cpp` does not grow a second audio stack. On the desktop listener, [`node_audio.cpp`](../server.cpp/src/node-features/audio/node_audio.cpp) mounts `SourceHost` and `SinkHost` on `/v1/audio/*`. The phone image compiles the vfs listener and the pair file, not those routes. The node gate authorizes them.
+
+Android sets `PM_AUDIO_SPEECH_CLIENTS` off and `PM_AUDIO_SOUND_TRIGGER` on. GTCRN live is compiled in. `jni_pm_voice.cpp` and `jni_sound_trigger.cpp` call the library. Kotlin keeps the speech recognizer, Android TTS, the media session, and the LAN pipe. Live voice PCM stays on the phone. The pipe is the phone calling the desktop routes.
+
+`pm/audio/clock_trial.hpp` covers speech and the phone mic. Pass-through and speakers do not use it. Nothing in it runs on an audio callback. The desktop is the master when a caller opts in. One estimate does not step a playing device.
+
+The host installs the hooks this library cannot see (log, allow-gates, plugin tables, echo cancellation). The C++ ElevenLabs client leaves the machine only when `PM_AUDIO_SPEECH_CLIENTS` is on. The APK uses the Kotlin speech client instead.
 
 ![pm-audio: host, library, and the parts inside it](docs/architecture/overview.visual-check.1440x900.light.png)
 
-One lease per process. Capture and playback refuse to start without the current token. Acquiring a lease bumps that token; the previous holder stops when `lease_token()` no longer matches, and a released token cannot be released again. An idle phone call takes the lease. A route stores a device descriptor, not a raw id. Mic PCM stays dry unless the host installed a WebRTC backend.
+One lease per process. Capture and playback refuse to start without the current token. Acquiring a lease bumps that token; the previous holder stops when `lease_token()` no longer matches, and a released token cannot be released again. An idle phone call takes the lease. The phone mic takes the lease inside the phone process. The desktop capture behind `/v1/audio` is a different process, and the phone does not hold that lease. A route stores a device descriptor, not a raw id. Mic PCM stays dry unless the host installed a WebRTC backend.
 
 PCM is interleaved s16. A frame count is per channel. `PcmRecordBuffer::push` copies into a fixed ring and does not open a file; a worker grows RAM and spills. A WAV export that does not fit a 32-bit RIFF header fails and leaves the recording in place. `AudioRingBuffer` is single-producer and single-consumer. `push` may wait; a capture callback uses `try_push`. Path helpers live in `pm/audio/text.hpp`. When `pm::commons` is already in the build, or an installed `pm-commons` package is on `CMAKE_PREFIX_PATH`, the library links it. `PM_AUDIO_ASAN` exists and is off unless you turn it on.
 
 ![Session lease, route, capture, echo, ring, and record](docs/architecture/session.visual-check.1440x900.light.png)
 
-`voice_session` stays on the host. It fills capture, enhancement, and transcription function pointers. The pipeline resamples an utterance to 16 kHz mono, enhances it, matches a wake word, then transcribes.
+`voice_session` stays on the desktop host. It fills capture, enhancement, and transcription function pointers. The pipeline resamples an utterance to 16 kHz mono, enhances it, matches a wake word, then transcribes. Android does not install those adapters. JNI calls the lease, AAudio, and the recorder.
 
 ![Voice pipeline and host adapters](docs/architecture/voice.visual-check.1440x900.light.png)
 
-`speech_factory` stays on the host. Whisper and VibeVoice compile in only when the parent already has them. Windows speech needs C++/WinRT. MOSS Nano is a DLL.
+`speech_factory` stays on the desktop host. Whisper and VibeVoice compile in only when the parent already has them. Windows speech needs C++/WinRT. MOSS Nano is a DLL. The Android build leaves the C++ speech clients out.
 
 ![Speech engines](docs/architecture/speech.visual-check.1440x900.light.png)
 
@@ -136,14 +142,16 @@ set(PM_AUDIO_ONNX_ROOT "/opt/onnxruntime" CACHE PATH "" FORCE)
 
 `PM_AUDIO_TANIT_ROOT` is the tree searched for `third_party/onnxruntime-*` and the DeepFilterNet and GTCRN model folders when those paths are not set. `pm-audio runtimes` prints the roots it resolved.
 
-## Refernences Internal
+## References Internal
 
 - [ASR-Commands - aka "Voice Commands"](./docs/asr-commands.md)
 - [Audio filters](./docs/audio-next-filters.md)
 - [Feature extraction, pattern matching (Ridge)](./docs/audio-patterns.md)
 - [Android Handsfree implementation notes](./docs/handsfree-android.md)
+- [Android audio pipe](../../android/docs/audio-pipe.md)
+- [Desktop audio routes](../server.cpp/src/node-features/audio/node_audio.cpp)
 
-## Refernences External
+## References External
 
 - [https://webrtchacks.com/how-webrtcs-neteq-jitter-buffer-provides-smooth-audio/](https://webrtchacks.com/how-webrtcs-neteq-jitter-buffer-provides-smooth-audio/)
 - [https://webrtchacks.com/chrome-neural-echo-cancellation/](https://webrtchacks.com/chrome-neural-echo-cancellation/)

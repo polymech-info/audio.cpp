@@ -1,4 +1,5 @@
 #include "pm/audio/record_session.hpp"
+#include "process/process_helpers.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -91,20 +92,6 @@ bool process_alive(uint64_t pid)
     return ok && code == STILL_ACTIVE;
 }
 
-std::wstring quote_arg(const std::wstring& s)
-{
-    std::wstring out;
-    out.reserve(s.size() + 2);
-    out += L'"';
-    for (wchar_t c : s) {
-        if (c == L'"')
-            out += L'\\';
-        out += c;
-    }
-    out += L'"';
-    return out;
-}
-
 struct DefaultMicPaths {
     std::filesystem::path wav;
     std::filesystem::path txt;
@@ -133,9 +120,9 @@ bool spawn_detached_record(const DefaultMicPaths& paths, std::string& err)
     std::error_code ec;
     std::filesystem::create_directories(paths.wav.parent_path(), ec);
 
-    std::wstring cmd = quote_arg(exe.wstring()) + L" audio record --stt --dst "
-                       + quote_arg(paths.wav.wstring()) + L" --text-out "
-                       + quote_arg(paths.txt.wstring());
+    std::wstring cmd = media::process::quote_process_arg(exe.wstring()) + L" audio record --stt --dst "
+                       + media::process::quote_process_arg(paths.wav.wstring()) + L" --text-out "
+                       + media::process::quote_process_arg(paths.txt.wstring());
     std::vector<wchar_t> mutable_cmd(cmd.begin(), cmd.end());
     mutable_cmd.push_back(L'\0');
 

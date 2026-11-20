@@ -5,35 +5,54 @@
     "title": "pm-audio voice pipeline",
     "locale": "en",
     "quality_profile": "showcase",
-    "viewBox": [1160, 520],
+    "viewBox": [1180, 680],
     "views": [
-      { "id": "adapters", "label": "Host adapters", "focus": ["host", "adapters", "pipeline"], "note": "voice_session stays on the host. It fills capture, enhancement, and transcription function pointers." },
-      { "id": "utterance", "label": "One utterance", "focus": ["pipeline", "enhance", "match", "stt", "callbacks"], "note": "PCM is resampled to 16 kHz mono, enhanced, matched for a wake word, then transcribed." }
+      {
+        "id": "adapters",
+        "label": "Desktop adapters",
+        "focus": ["host", "adapters", "pipeline"],
+        "note": "voice_session stays on the desktop host. It fills capture, enhancement, and transcription function pointers."
+      },
+      {
+        "id": "utterance",
+        "label": "One utterance",
+        "focus": ["pipeline", "enhance", "match", "stt", "callbacks"],
+        "note": "PCM is resampled to 16 kHz mono, enhanced, matched for a wake word, then transcribed."
+      },
+      {
+        "id": "phone",
+        "label": "Phone",
+        "focus": ["android", "clock", "host"],
+        "note": "Android does not install VoiceAdapters. JNI calls the lease and AAudio. The clock trial is speech and the mic, and nothing applies it yet."
+      }
     ]
   },
   "components": [
-    { "id": "host", "type": "frontend", "label": "voice_session", "sublabel": "stays on the host", "pos": [30, 200], "size": [160, 64] },
-    { "id": "adapters", "type": "external", "label": "VoiceAdapters", "sublabel": "function pointers", "pos": [250, 200], "size": [170, 64] },
-    { "id": "pipeline", "type": "backend", "label": "VoicePipeline", "sublabel": "worker thread", "tag": "inject or capture", "pos": [480, 200], "size": [170, 64] },
-    { "id": "capture", "type": "backend", "label": "Capture adapter", "sublabel": "mic · desktop · mix", "pos": [740, 60], "size": [180, 60] },
-    { "id": "enhance", "type": "backend", "label": "Enhancer", "sublabel": "DeepFilter or GTCRN", "pos": [740, 180], "size": [180, 60] },
-    { "id": "match", "type": "backend", "label": "VAD and wake", "sublabel": "16 kHz mono", "pos": [740, 300], "size": [180, 60] },
-    { "id": "stt", "type": "backend", "label": "Transcription adapter", "sublabel": "host picks the engine", "pos": [740, 420], "size": [180, 60] },
-    { "id": "callbacks", "type": "messagebus", "label": "Route callbacks", "sublabel": "trigger · transcript · state", "pos": [980, 240], "size": [150, 64] }
+    { "id": "host", "type": "frontend", "label": "voice_session", "sublabel": "desktop host", "pos": [30, 150], "size": [170, 64] },
+    { "id": "android", "type": "frontend", "label": "Android host", "sublabel": "JNI · Kotlin", "pos": [30, 500], "size": [170, 64] },
+    { "id": "clock", "type": "backend", "label": "Clock trial", "sublabel": "speech · phone mic", "tag": "not on the pipe", "pos": [280, 500], "size": [180, 64] },
+    { "id": "adapters", "type": "external", "label": "VoiceAdapters", "sublabel": "function pointers", "pos": [270, 150], "size": [170, 64] },
+    { "id": "pipeline", "type": "backend", "label": "VoicePipeline", "sublabel": "worker thread", "tag": "inject or capture", "pos": [510, 150], "size": [180, 64] },
+    { "id": "capture", "type": "backend", "label": "Capture adapter", "sublabel": "mic · desktop · mix", "pos": [780, 40], "size": [180, 60] },
+    { "id": "enhance", "type": "backend", "label": "Enhancer", "sublabel": "DeepFilter or GTCRN", "pos": [780, 160], "size": [180, 60] },
+    { "id": "match", "type": "backend", "label": "VAD and wake", "sublabel": "16 kHz mono", "pos": [780, 280], "size": [180, 60] },
+    { "id": "stt", "type": "backend", "label": "Transcription adapter", "sublabel": "host picks the engine", "pos": [780, 420], "size": [180, 60] },
+    { "id": "callbacks", "type": "messagebus", "label": "Route callbacks", "sublabel": "trigger · transcript · state", "pos": [1010, 240], "size": [150, 64] }
   ],
   "connections": [
     { "id": "host-adapters", "from": "host", "to": "adapters", "label": "install", "variant": "emphasis" },
     { "id": "adapters-pipeline", "from": "adapters", "to": "pipeline", "label": "start", "variant": "emphasis" },
-    { "id": "pipeline-capture", "from": "pipeline", "to": "capture", "fromSide": "top", "toSide": "left" },
+    { "id": "pipeline-capture", "from": "pipeline", "to": "capture" },
     { "id": "pipeline-enhance", "from": "pipeline", "to": "enhance" },
     { "id": "pipeline-match", "from": "pipeline", "to": "match" },
-    { "id": "pipeline-stt", "from": "pipeline", "to": "stt", "fromSide": "bottom", "toSide": "left" },
-    { "id": "match-cb", "from": "match", "to": "callbacks", "label": "wake" },
-    { "id": "stt-cb", "from": "stt", "to": "callbacks", "fromSide": "right", "toSide": "bottom", "label": "text" }
+    { "id": "pipeline-stt", "from": "pipeline", "to": "stt" },
+    { "id": "match-cb", "from": "match", "to": "callbacks", "label": "wake", "labelAt": [930, 250] },
+    { "id": "stt-cb", "from": "stt", "to": "callbacks", "label": "text", "labelAt": [1020, 380] },
+    { "id": "android-clock", "from": "android", "to": "clock", "label": "opt in", "variant": "dashed", "labelAt": [230, 478] }
   ],
   "cards": [
-    { "dot": "cyan", "title": "Adapters", "items": ["The pipeline does not open Whisper or a device itself. The host supplies those three callbacks."] },
-    { "dot": "emerald", "title": "Utterance", "items": ["Enhance, blend wet with dry, then match. Replay feeds the same worker without a live mic."] },
-    { "dot": "violet", "title": "Back to the host", "items": ["Trigger, cancel, state, error, and transcript go out through RouteCallbacks. Settings stay in voice_session."] }
+    { "dot": "cyan", "title": "Desktop adapters", "items": ["voice_session fills the three callbacks. Android does not install VoiceAdapters. JNI calls the lease, AAudio, and the recorder."] },
+    { "dot": "emerald", "title": "Utterance", "items": ["Enhance, blend wet with dry, then match. Replay feeds the same worker without a live mic. Kotlin keeps the recognizer, Android TTS, and the media session."] },
+    { "dot": "violet", "title": "Clock trial", "items": ["Speech and the phone mic. Header only. The desktop is the master. One estimate does not step a playing device, and the pipe does not call it."] }
   ]
 }

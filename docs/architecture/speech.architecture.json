@@ -12,7 +12,7 @@
     ]
   },
   "components": [
-    { "id": "factory", "type": "frontend", "label": "speech_factory", "sublabel": "stays on the host", "pos": [30, 220], "size": [160, 64] },
+    { "id": "factory", "type": "frontend", "label": "speech_factory", "sublabel": "desktop host", "pos": [30, 220], "size": [160, 64] },
     { "id": "stt", "type": "backend", "label": "STT", "sublabel": "package engines", "pos": [260, 120], "size": [150, 60] },
     { "id": "tts", "type": "backend", "label": "TTS", "sublabel": "package engines", "pos": [260, 320], "size": [150, 60] },
     { "id": "whisper", "type": "backend", "label": "Whisper.cpp", "sublabel": "in-process or plugin", "pos": [500, 40], "size": [180, 60] },
@@ -38,7 +38,7 @@
     { "id": "gates-factory", "from": "gates", "to": "factory", "fromSide": "top", "toSide": "bottom", "label": "install", "variant": "security" }
   ],
   "cards": [
-    { "dot": "cyan", "title": "Host still chooses", "items": ["speech_factory maps CLI flags and settings onto option structs. Proxy STT and TTS stay out of this library."] },
+    { "dot": "cyan", "title": "Host still chooses", "items": ["speech_factory maps desktop flags onto option structs. Proxy STT and TTS stay out of this library. The APK sets PM_AUDIO_SPEECH_CLIENTS off and uses the Kotlin speech client."] },
     { "dot": "amber", "title": "Present or idle", "items": ["No whisper target means no whisper_full loop. No cppwinrt means the Windows engines throw. No DLL means that engine is idle."] },
     { "dot": "rose", "title": "Gates", "items": ["The host installs the Whisper allow-gate, cancel, ggml loader, and the VibeVoice plugin table. The library does not see Group Policy."] }
   ]
