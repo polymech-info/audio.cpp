@@ -28,6 +28,9 @@ namespace {
 constexpr uint32_t k_rate     = constants::k_recording_sample_rate;
 constexpr uint32_t k_channels = constants::k_recording_channels;
 
+std::atomic<uint32_t> g_default_rate{k_rate};
+std::atomic<uint32_t> g_default_bits{16};
+
 std::string json_string(const nlohmann::json& body, const char* key, bool& bad)
 {
     if (!body.contains(key) || body[key].is_null())
@@ -137,6 +140,8 @@ struct Spec {
     std::string mic;
     std::string loopback;
     std::string input;
+    std::uint32_t sample_rate = k_rate;
+    std::uint32_t bits = 16;
     std::vector<LegSpec> legs;
 };
 
@@ -319,17 +324,61 @@ bool read_fields(const nlohmann::json& body,
     return true;
 }
 
+bool read_format(const nlohmann::json& body, Spec& spec, bool keep, std::string& err)
+{
+    std::uint32_t rate = keep ? spec.sample_rate : g_default_rate.load();
+    std::uint32_t bits = keep ? spec.bits : g_default_bits.load();
+    auto take = [&](const char* key, std::uint32_t& dst) -> bool {
+        if (!body.contains(key) || body[key].is_null())
+            return true;
+        if (!body[key].is_number_integer() && !body[key].is_number_unsigned()) {
+            err = std::string(key) + " must be a number";
+            return false;
+        }
+        const auto n = body[key].get<std::int64_t>();
+        if (n <= 0 || n > 384000) {
+            err = std::string(key) + " is out of range";
+            return false;
+        }
+        dst = static_cast<std::uint32_t>(n);
+        return true;
+    };
+    if (!take("sampleRate", rate) || !take("bits", bits))
+        return false;
+    if (rate != 16000 && rate != 24000 && rate != constants::k_recording_sample_rate) {
+        err = "sampleRate must be 16000, 24000, or 48000";
+        return false;
+    }
+    if (bits != 16) {
+        err = "bits must be 16";
+        return false;
+    }
+    spec.sample_rate = rate;
+    spec.bits = bits;
+    return true;
+}
+
+struct Cursor {
+    uint64_t id = 0;
+    uint64_t at = 0;
+};
+
 struct PcmRing {
     std::mutex              mu;
     std::condition_variable cv;
     std::vector<int16_t>    buf;
-    size_t                  read  = 0;
-    size_t                  count = 0;
+    size_t                  write = 0;
+    uint64_t                produced = 0;
     bool                    closed = false;
     std::atomic<uint64_t>   dropped{0};
+    std::vector<Cursor>     cursors;
+    uint64_t                next_cursor = 1;
+    uint64_t                legacy = 0;
+    uint32_t                rate = k_rate;
 
-    PcmRing()
-        : buf(static_cast<size_t>(k_rate) * k_channels)
+    explicit PcmRing(uint32_t sample_rate)
+        : buf(static_cast<size_t>(sample_rate) * k_channels)
+        , rate(sample_rate)
     {
     }
 };
@@ -345,30 +394,106 @@ void push_pcm(const std::shared_ptr<PcmRing>& ring, const int16_t* pcm, size_t f
         if (ring->closed)
             return;
         const size_t cap = ring->buf.size();
-        size_t dropped = 0;
+        const size_t incoming = n;
         if (n >= cap) {
-            dropped = ring->count + (n - cap);
             pcm += n - cap;
-            n = cap;
-            ring->read  = 0;
-            ring->count = 0;
-        } else if (ring->count + n > cap) {
-            dropped = ring->count + n - cap;
-            ring->read = (ring->read + dropped) % cap;
-            ring->count -= dropped;
+            std::memcpy(ring->buf.data(), pcm, cap * sizeof(int16_t));
+            ring->write = 0;
+        } else {
+            const size_t first = std::min(n, cap - ring->write);
+            std::memcpy(ring->buf.data() + ring->write, pcm, first * sizeof(int16_t));
+            if (n > first)
+                std::memcpy(ring->buf.data(), pcm + first, (n - first) * sizeof(int16_t));
+            ring->write = (ring->write + n) % cap;
         }
-        if (dropped > 0)
-            ring->dropped.fetch_add(dropped / k_channels, std::memory_order_relaxed);
-        const size_t write = (ring->read + ring->count) % cap;
-        const size_t first = std::min(n, cap - write);
-        std::memcpy(ring->buf.data() + write, pcm, first * sizeof(int16_t));
-        if (n > first)
-            std::memcpy(ring->buf.data(), pcm + first, (n - first) * sizeof(int16_t));
-        ring->count += n;
+        ring->produced += incoming;
+        for (auto& cursor : ring->cursors) {
+            if (ring->produced > cursor.at + cap) {
+                const uint64_t jump = ring->produced - cap - cursor.at;
+                cursor.at = ring->produced - cap;
+                ring->dropped.fetch_add(jump / k_channels, std::memory_order_relaxed);
+            }
+        }
         wake = true;
     }
     if (wake)
-        ring->cv.notify_one();
+        ring->cv.notify_all();
+}
+
+uint64_t add_cursor(const std::shared_ptr<PcmRing>& ring)
+{
+    std::lock_guard<std::mutex> lk(ring->mu);
+    Cursor cursor;
+    cursor.id = ring->next_cursor++;
+    cursor.at = ring->produced;
+    ring->cursors.push_back(cursor);
+    return cursor.id;
+}
+
+void remove_cursor(const std::shared_ptr<PcmRing>& ring, uint64_t id)
+{
+    if (!ring || id == 0)
+        return;
+    std::lock_guard<std::mutex> lk(ring->mu);
+    for (auto it = ring->cursors.begin(); it != ring->cursors.end(); ++it) {
+        if (it->id != id)
+            continue;
+        ring->cursors.erase(it);
+        if (ring->legacy == id)
+            ring->legacy = 0;
+        return;
+    }
+}
+
+int read_cursor(const std::shared_ptr<PcmRing>& ring, uint64_t id, int16_t* dst, int max_frames, int wait_ms)
+{
+    if (!ring || !dst || max_frames <= 0 || id == 0)
+        return -1;
+    const size_t want = static_cast<size_t>(max_frames) * k_channels;
+    if (wait_ms < 0)
+        wait_ms = 0;
+    if (wait_ms > 5000)
+        wait_ms = 5000;
+    std::unique_lock<std::mutex> lk(ring->mu);
+    auto find = [&]() -> Cursor* {
+        for (auto& item : ring->cursors) {
+            if (item.id == id)
+                return &item;
+        }
+        return nullptr;
+    };
+    Cursor* cursor = find();
+    if (!cursor)
+        return -1;
+    const uint64_t seen = cursor->at;
+    if (seen == ring->produced && !ring->closed) {
+        ring->cv.wait_for(lk, std::chrono::milliseconds(wait_ms), [&] {
+            return ring->produced > seen || ring->closed;
+        });
+        cursor = find();
+        if (!cursor)
+            return -1;
+    }
+    if (cursor->at >= ring->produced)
+        return ring->closed ? -1 : 0;
+    const size_t cap = ring->buf.size();
+    if (ring->produced > cursor->at + cap) {
+        const uint64_t jump = ring->produced - cap - cursor->at;
+        cursor->at = ring->produced - cap;
+        ring->dropped.fetch_add(jump / k_channels, std::memory_order_relaxed);
+    }
+    size_t n = static_cast<size_t>(std::min<uint64_t>(want, ring->produced - cursor->at));
+    n -= n % k_channels;
+    if (n == 0)
+        return 0;
+    const size_t age = static_cast<size_t>(ring->produced - cursor->at);
+    const size_t pos = (ring->write + cap - age) % cap;
+    const size_t first = std::min(n, cap - pos);
+    std::memcpy(dst, ring->buf.data() + pos, first * sizeof(int16_t));
+    if (n > first)
+        std::memcpy(dst + first, ring->buf.data(), (n - first) * sizeof(int16_t));
+    cursor->at += n;
+    return static_cast<int>(n / k_channels);
 }
 
 void close_ring(const std::shared_ptr<PcmRing>& ring)
@@ -377,8 +502,6 @@ void close_ring(const std::shared_ptr<PcmRing>& ring)
         return;
     {
         std::lock_guard<std::mutex> lk(ring->mu);
-        ring->read = 0;
-        ring->count = 0;
         ring->closed = true;
     }
     ring->cv.notify_all();
@@ -529,6 +652,9 @@ struct Leg {
 };
 
 struct Session {
+    std::uint64_t id = 0;
+    std::uint32_t sample_rate = k_rate;
+    std::uint32_t bits = 16;
     std::string input;
     std::string kind;
     std::string requested_mic;
@@ -572,7 +698,7 @@ void mix_loop(Session* session)
 {
     using clock = std::chrono::steady_clock;
     constexpr int k_tick_ms = 10;
-    const size_t k_frames = std::max<size_t>(1, (static_cast<size_t>(k_rate) * k_tick_ms) / 1000);
+    const size_t k_frames = std::max<size_t>(1, (static_cast<size_t>(session->sample_rate) * k_tick_ms) / 1000);
     const size_t k_slack = k_frames * 4;
     std::vector<int16_t> chunk(k_frames * k_channels);
     std::vector<int16_t> mixed(k_frames * k_channels);
@@ -670,7 +796,9 @@ std::unique_ptr<Session> open_bus(const Spec& spec, std::string& err)
     auto session = std::make_unique<Session>();
     session->input = spec.input;
     session->kind = spec.kind;
-    session->ring = std::make_shared<PcmRing>();
+    session->sample_rate = spec.sample_rate;
+    session->bits = spec.bits;
+    session->ring = std::make_shared<PcmRing>(spec.sample_rate);
     try {
         for (const auto& want : spec.legs) {
             auto leg = std::make_shared<Leg>();
@@ -685,7 +813,7 @@ std::unique_ptr<Session> open_bus(const Spec& spec, std::string& err)
             };
             if (want.kind == "mic") {
                 leg->mic = std::make_unique<AudioInput>();
-                leg->mic->start(on_pcm, want.name, k_rate, k_channels, false);
+                leg->mic->start(on_pcm, want.name, spec.sample_rate, k_channels, false);
                 if (!leg->mic->is_running()) {
                     err = "microphone capture failed";
                     return nullptr;
@@ -693,7 +821,7 @@ std::unique_ptr<Session> open_bus(const Spec& spec, std::string& err)
                 leg->opened = leg->mic->opened_device_name();
             } else {
                 leg->loop = std::make_unique<DesktopAudioCapture>();
-                if (!leg->loop->start(on_pcm, want.name, err, k_rate, k_channels)) {
+                if (!leg->loop->start(on_pcm, want.name, err, spec.sample_rate, k_channels)) {
                     if (err.empty())
                         err = "loopback capture failed";
                     return nullptr;
@@ -727,7 +855,9 @@ std::unique_ptr<Session> open_session(const Spec& spec, std::string& err)
     session->kind = spec.kind;
     session->requested_mic = spec.mic;
     session->requested_loop = spec.loopback;
-    session->ring = std::make_shared<PcmRing>();
+    session->sample_rate = spec.sample_rate;
+    session->bits = spec.bits;
+    session->ring = std::make_shared<PcmRing>(spec.sample_rate);
     try {
         if (spec.kind == "mic") {
             session->mic = std::make_unique<AudioInput>();
@@ -737,7 +867,7 @@ std::unique_ptr<Session> open_session(const Spec& spec, std::string& err)
                 [levels, ring](const int16_t* pcm, size_t frames) {
                     note_pcm(levels, ring, pcm, frames);
                 },
-                spec.mic, k_rate, k_channels, false);
+                spec.mic, spec.sample_rate, k_channels, false);
             if (!session->mic->is_running()) {
                 err = "microphone capture failed";
                 return nullptr;
@@ -753,7 +883,7 @@ std::unique_ptr<Session> open_session(const Spec& spec, std::string& err)
                     [levels, ring](const int16_t* pcm, size_t frames) {
                         note_pcm(levels, ring, pcm, frames);
                     },
-                    spec.loopback, err, k_rate, k_channels)) {
+                    spec.loopback, err, spec.sample_rate, k_channels)) {
                 if (err.empty())
                     err = "loopback capture failed";
                 return nullptr;
@@ -765,8 +895,10 @@ std::unique_ptr<Session> open_session(const Spec& spec, std::string& err)
         session->mix = std::make_unique<MixedAudioCapture>();
         auto levels = session->levels;
         auto ring = session->ring;
-        const auto cfg = make_recording_capture_config(
+        auto cfg = make_recording_capture_config(
             "mix", spec.mic, spec.loopback, 1.0f, 1.0f, CaptureSource::mix);
+        cfg.sample_rate = spec.sample_rate;
+        cfg.channels = k_channels;
         if (!session->mix->start(
                 cfg,
                 [levels, ring](const int16_t* pcm, size_t frames) {
@@ -795,12 +927,16 @@ bool same_request(const Session& live, const Spec& spec)
     if (!spec.legs.empty() || !live.legs.empty()) {
         if (spec.legs.size() != live.legs.size())
             return false;
+        if (live.sample_rate != spec.sample_rate || live.bits != spec.bits)
+            return false;
         for (size_t i = 0; i < spec.legs.size(); ++i) {
             if (spec.legs[i].spec != live.legs[i]->spec)
                 return false;
         }
         return true;
     }
+    if (live.sample_rate != spec.sample_rate || live.bits != spec.bits)
+        return false;
     return live.kind == spec.kind && live.requested_mic == spec.mic
            && live.requested_loop == spec.loopback;
 }
@@ -867,6 +1003,7 @@ struct SourceHost::Impl {
     mutable std::mutex mu;
     Spec pending;
     std::unique_ptr<Session> live;
+    std::uint64_t seq = 0;
 
     nlohmann::json status_unlocked() const
     {
@@ -881,6 +1018,7 @@ struct SourceHost::Impl {
         nlohmann::json out = {
             {"ok", true},
             {"running", running},
+            {"session", running ? live->id : 0},
             {"phase", running ? "capture" : "idle"},
             {"input", running ? live->input : pending.input},
             {"kind", running ? live->kind : pending.kind},
@@ -888,7 +1026,8 @@ struct SourceHost::Impl {
             {"peak", peak},
             {"stalled", stalled},
             {"dropped", running && live->ring ? live->ring->dropped.load(std::memory_order_relaxed) : 0},
-            {"sampleRate", running ? k_rate : 0},
+            {"sampleRate", running ? live->sample_rate : 0},
+            {"bits", running ? live->bits : 0},
             {"channels", running ? k_channels : 0},
             {"mic", running ? live->mic_name : std::string{}},
             {"loopback", running ? live->loop_name : std::string{}},
@@ -964,6 +1103,7 @@ struct SourceHost::Impl {
             } else {
                 switched = static_cast<bool>(live);
                 old = std::move(live);
+                next->id = ++seq;
                 live = std::move(next);
                 pending = spec;
             }
@@ -989,42 +1129,57 @@ struct SourceHost::Impl {
         return old;
     }
 
-    int pull(int16_t* dst, int max_frames, int wait_ms)
+    std::shared_ptr<PcmRing> ring_for(uint64_t session)
     {
-        std::shared_ptr<PcmRing> ring;
-        {
-            std::lock_guard<std::mutex> lk(mu);
-            if (!live || max_frames <= 0 || !dst)
-                return -1;
-            ring = live->ring;
-        }
+        std::lock_guard<std::mutex> lk(mu);
+        if (!live || !live->ring)
+            return {};
+        if (session != 0 && live->id != session)
+            return {};
+        return live->ring;
+    }
+
+    uint64_t subscribe(uint64_t session)
+    {
+        const auto ring = ring_for(session);
+        if (!ring)
+            return 0;
+        return add_cursor(ring);
+    }
+
+    void unsubscribe(uint64_t session, uint64_t cursor)
+    {
+        remove_cursor(ring_for(session), cursor);
+    }
+
+    int pull_cursor(uint64_t session, uint64_t cursor, int16_t* dst, int max_frames, int wait_ms)
+    {
+        const auto ring = ring_for(session);
         if (!ring)
             return -1;
-        const size_t want = static_cast<size_t>(max_frames) * k_channels;
-        if (wait_ms < 0)
-            wait_ms = 0;
-        if (wait_ms > 5000)
-            wait_ms = 5000;
-        std::unique_lock<std::mutex> lk(ring->mu);
-        if (ring->count == 0 && !ring->closed) {
-            ring->cv.wait_for(lk, std::chrono::milliseconds(wait_ms), [&] {
-                return ring->count > 0 || ring->closed;
-            });
+        return read_cursor(ring, cursor, dst, max_frames, wait_ms);
+    }
+
+    int pull_session(uint64_t session, int16_t* dst, int max_frames, int wait_ms)
+    {
+        const auto ring = ring_for(session);
+        if (!ring)
+            return -1;
+        uint64_t cursor = 0;
+        {
+            std::lock_guard<std::mutex> lk(ring->mu);
+            cursor = ring->legacy;
         }
-        if (ring->count == 0)
-            return ring->closed ? -1 : 0;
-        size_t n = std::min(want, ring->count);
-        n -= n % k_channels;
-        if (n == 0)
-            return 0;
-        const size_t cap = ring->buf.size();
-        const size_t first = std::min(n, cap - ring->read);
-        std::memcpy(dst, ring->buf.data() + ring->read, first * sizeof(int16_t));
-        if (n > first)
-            std::memcpy(dst + first, ring->buf.data(), (n - first) * sizeof(int16_t));
-        ring->read = (ring->read + n) % cap;
-        ring->count -= n;
-        return static_cast<int>(n / k_channels);
+        if (cursor == 0)
+            cursor = add_cursor(ring);
+        {
+            std::lock_guard<std::mutex> lk(ring->mu);
+            if (ring->legacy == 0)
+                ring->legacy = cursor;
+            else
+                cursor = ring->legacy;
+        }
+        return read_cursor(ring, cursor, dst, max_frames, wait_ms);
     }
 };
 
@@ -1045,9 +1200,53 @@ void SourceHost::stop()
     old.reset();
 }
 
+bool SourceHost::stop_session(std::uint64_t session)
+{
+    std::lock_guard<std::mutex> gate(impl_->control);
+    {
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        if (!impl_->live)
+            return session == 0;
+        if (session != 0 && impl_->live->id != session)
+            return false;
+    }
+    auto old = impl_->release();
+    old.reset();
+    return true;
+}
+
+void SourceHost::set_capture_format(std::uint32_t sample_rate, std::uint32_t bits)
+{
+    if (sample_rate == 16000 || sample_rate == 24000 || sample_rate == k_rate)
+        g_default_rate.store(sample_rate);
+    if (bits == 16)
+        g_default_bits.store(bits);
+}
+
 int SourceHost::pull(std::int16_t* dst, int max_frames, int wait_ms)
 {
-    return impl_->pull(dst, max_frames, wait_ms);
+    return impl_->pull_session(0, dst, max_frames, wait_ms);
+}
+
+int SourceHost::pull_session(std::uint64_t session, std::int16_t* dst, int max_frames, int wait_ms)
+{
+    return impl_->pull_session(session, dst, max_frames, wait_ms);
+}
+
+std::uint64_t SourceHost::subscribe(std::uint64_t session)
+{
+    return impl_->subscribe(session);
+}
+
+void SourceHost::unsubscribe(std::uint64_t session, std::uint64_t cursor)
+{
+    impl_->unsubscribe(session, cursor);
+}
+
+int SourceHost::pull_cursor(std::uint64_t session, std::uint64_t cursor, std::int16_t* dst, int max_frames,
+                            int wait_ms)
+{
+    return impl_->pull_cursor(session, cursor, dst, max_frames, wait_ms);
 }
 
 SourceReply SourceHost::status() const
@@ -1089,7 +1288,7 @@ bool decode_request(const nlohmann::json& body,
         return false;
     if (!spec.legs.empty()) {
         fill_bus(spec);
-        return true;
+        return read_format(body, spec, false, err);
     }
     if (trim_copy(input).empty() && trim_copy(mic).empty() && trim_copy(loopback).empty()) {
         if (pending.input.empty() && pending.legs.empty()) {
@@ -1097,9 +1296,11 @@ bool decode_request(const nlohmann::json& body,
             return false;
         }
         spec = pending;
-        return true;
+        return read_format(body, spec, true, err);
     }
-    return parse_spec(input, mic, loopback, spec, err);
+    if (!parse_spec(input, mic, loopback, spec, err))
+        return false;
+    return read_format(body, spec, false, err);
 }
 
 SourceReply SourceHost::start(const nlohmann::json& body)

@@ -136,9 +136,17 @@ set(PM_AUDIO_ONNX_ROOT "/opt/onnxruntime" CACHE PATH "" FORCE)
 
 `PM_AUDIO_TANIT_ROOT` is the tree searched for `third_party/onnxruntime-*` and the DeepFilterNet and GTCRN model folders when those paths are not set. `pm-audio runtimes` prints the roots it resolved.
 
-## Refernences
+## Refernences Internal
 
 - [ASR-Commands - aka "Voice Commands"](./docs/asr-commands.md)
 - [Audio filters](./docs/audio-next-filters.md)
 - [Feature extraction, pattern matching (Ridge)](./docs/audio-patterns.md)
 - [Android Handsfree implementation notes](./docs/handsfree-android.md)
+
+## Refernences External
+
+- [https://webrtchacks.com/how-webrtcs-neteq-jitter-buffer-provides-smooth-audio/](https://webrtchacks.com/how-webrtcs-neteq-jitter-buffer-provides-smooth-audio/)
+- [https://webrtchacks.com/chrome-neural-echo-cancellation/](https://webrtchacks.com/chrome-neural-echo-cancellation/)
+- [Audio.cpp - https://github.com/0xShug0/audio.cpp](https://github.com/0xShug0/audio.cpp)
+
+

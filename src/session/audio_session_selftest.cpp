@@ -1,4 +1,6 @@
 #include "pm/audio/session/audio_session_selftest.hpp"
+#include "pm/audio/clock_trial.hpp"
+#include "pm/audio/stream_gap.hpp"
 #include "pm/audio/vad_gate_selftest.hpp"
 #include "pm/audio/session/recorder.hpp"
 
@@ -508,13 +510,80 @@ std::string report_json(std::string_view suite, const State& st)
     return out;
 }
 
+void check_clock(State& st)
+{
+    st.expect(!clock_trial_enabled(ClockTrialUse::None), "clock trial off");
+    st.expect(clock_trial_enabled(ClockTrialUse::Speech), "clock trial speech");
+    st.expect(clock_trial_enabled(ClockTrialUse::Mic), "clock trial mic");
+
+    SessionTimeline line;
+    line.reset(7);
+    const AudioFrameHeader first = line.stamp(k_clock_frame_samples);
+    const AudioFrameHeader second = line.stamp(k_clock_frame_samples);
+    st.expect(first.session_id == 7 && first.sample_index == 0 && first.frame_count == 480, "clock stamp");
+    st.expect(second.sample_index == 480 && second.epoch == first.epoch, "clock stamp advances");
+    const std::uint32_t epoch = line.epoch();
+    line.reset(7);
+    st.expect(line.epoch() == epoch + 1 && line.sample_index() == 0, "clock epoch");
+
+    ClockSync sync;
+    ClockExchange bad;
+    bad.t1_ns = 200;
+    bad.t4_ns = 100;
+    st.expect(!sync.observe(bad) && !sync.ready(), "clock rejects a negative rtt");
+
+    ClockExchange one;
+    one.t1_ns = 1000000000LL;
+    one.t2_ns = 1000000150LL;
+    one.t3_ns = 1000000150LL;
+    one.t4_ns = 1000000200LL;
+    st.expect(sync.observe(one) && sync.ready(), "clock accepts one exchange");
+    st.expect(sync.toMasterTime(1000000100LL) == 1000000150LL, "clock offset is fifty ns");
+
+    ClockExchange later;
+    later.t1_ns = 3000000000LL;
+    later.t2_ns = 3000002150LL;
+    later.t3_ns = 3000002150LL;
+    later.t4_ns = 3000000200LL;
+    st.expect(sync.observe(later), "clock accepts a later exchange");
+    const double ppm = sync.driftPpm();
+    st.expect(ppm > 0.5 && ppm < 1.5, "clock drift is about one ppm");
+
+    ClockExchange stall;
+    stall.t1_ns = 4000000000LL;
+    stall.t2_ns = 4000000000LL;
+    stall.t3_ns = 4000000000LL;
+    stall.t4_ns = 4600000000LL;
+    st.expect(!sync.observe(stall) && sync.samples() == 2, "clock rejects a stalled exchange");
+}
+
+void check_gap(State& st)
+{
+    StreamWindow full;
+    full.elapsed_ms = 1000;
+    full.received_bytes = 48000ULL * 2 * 2;
+    const StreamGap held = measure_stream_gap(full);
+    st.expect(!held.underrun && held.shortfall == 0, "a full window is not an underrun");
+
+    StreamWindow speech = full;
+    speech.sample_rate = 16000;
+    speech.received_bytes = 16000ULL * 2 * 2;
+    st.expect(!measure_stream_gap(speech).underrun, "16 kHz uses its own byte rate");
+
+    StreamWindow thin = full;
+    thin.received_bytes = full.received_bytes / 5;
+    const StreamGap starved = measure_stream_gap(thin);
+    st.expect(starved.underrun && starved.shortfall > starved.expected_bytes / 2, "a short window is an underrun");
+}
+
 } // namespace
 
 SelfTestReport run_selftest(std::string_view suite)
 {
     SelfTestReport report;
     if (suite != "all" && suite != "lease" && suite != "route" && suite != "event" && suite != "graph"
-        && suite != "record" && suite != "voice" && suite != "vad-gate") {
+        && suite != "record" && suite != "voice" && suite != "vad-gate" && suite != "clock"
+        && suite != "gap") {
         report.json = "{\"ok\":false,\"function\":\"audio-session\",\"error\":\"unknown suite\"}";
         return report;
     }
@@ -535,6 +604,10 @@ SelfTestReport run_selftest(std::string_view suite)
         const VadGateSelfTestReport vg = run_vad_gate_selftest();
         st.expect(vg.ok, "vad-gate", vg.detail);
     }
+    if (want_suite(suite, "clock"))
+        check_clock(st);
+    if (want_suite(suite, "gap"))
+        check_gap(st);
     report.ok = st.failures.empty();
     report.json = report_json(suite, st);
     return report;
