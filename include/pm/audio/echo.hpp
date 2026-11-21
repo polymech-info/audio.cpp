@@ -9,6 +9,25 @@
 
 namespace pm::audio {
 
+struct ApmStatistics {
+    bool has_echo_return_loss = false;
+    double echo_return_loss = 0;
+    bool has_echo_return_loss_enhancement = false;
+    double echo_return_loss_enhancement = 0;
+    bool has_divergent_filter_fraction = false;
+    double divergent_filter_fraction = 0;
+    bool has_delay_median_ms = false;
+    int delay_median_ms = 0;
+    bool has_delay_standard_deviation_ms = false;
+    int delay_standard_deviation_ms = 0;
+    bool has_residual_echo_likelihood = false;
+    double residual_echo_likelihood = 0;
+    bool has_residual_echo_likelihood_recent_max = false;
+    double residual_echo_likelihood_recent_max = 0;
+    bool has_delay_ms = false;
+    int delay_ms = 0;
+};
+
 struct ApmBackend {
     void* (*create)(int sample_rate_hz, int channels, bool agc, bool ns) = nullptr;
     void (*destroy)(void* handle) = nullptr;
@@ -16,6 +35,7 @@ struct ApmBackend {
     void (*process_render)(void* handle, const std::int16_t* pcm, std::size_t frames) = nullptr;
     void (*process_capture)(void* handle, std::int16_t* pcm, std::size_t frames) = nullptr;
     bool (*active)(void* handle) = nullptr;
+    bool (*statistics)(void* handle, ApmStatistics* out) = nullptr;
 };
 
 // Installed by the host. With no backend, create() returns null and capture is unchanged.
@@ -42,6 +62,7 @@ public:
     void set_stream_delay_ms(int ms);
     void process_render_reference(const int16_t* pcm, std::size_t frames);
     void process_capture(int16_t* pcm, std::size_t frames);
+    bool statistics(ApmStatistics& out) const;
 
 private:
     explicit EchoCancellationProcessor(Config cfg);

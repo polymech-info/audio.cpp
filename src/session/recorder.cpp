@@ -517,6 +517,7 @@ struct Engine {
     std::mutex mu;
     RecorderStatus status;
     std::atomic<bool> stop{false};
+    std::atomic<bool> paused{false};
     std::atomic<bool> want_gtcrn{false};
     std::atomic<bool> want_aec{false};
     std::atomic<bool> want_agc{false};
@@ -790,6 +791,12 @@ struct Engine {
         };
 
         while (!stop.load(std::memory_order_relaxed)) {
+            if (paused.load(std::memory_order_relaxed)) {
+                int ignored = stream_rate;
+                aaudio_capture_read(raw.data(), std::min(full_chunk, raw.size()), &ignored);
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                continue;
+            }
             if (lease_token() != token) {
                 failed = true;
                 local.reason = "audio lease lost";
@@ -1009,6 +1016,7 @@ RecorderStatus recorder_start(const RecorderRequest& request)
     }
 
     eng.stop.store(false, std::memory_order_relaxed);
+    eng.paused.store(false, std::memory_order_relaxed);
     eng.want_gtcrn.store(request.gtcrn, std::memory_order_relaxed);
     eng.want_aec.store(request.aec, std::memory_order_relaxed);
     eng.want_agc.store(request.agc, std::memory_order_relaxed);
@@ -1063,10 +1071,16 @@ RecorderStatus recorder_set(bool gtcrn, bool aec, bool agc)
     return status;
 }
 
+void recorder_pause(bool on)
+{
+    engine().paused.store(on, std::memory_order_release);
+}
+
 RecorderStatus recorder_stop()
 {
     Engine& eng = engine();
     std::lock_guard<std::mutex> gate(eng.life);
+    eng.paused.store(false, std::memory_order_relaxed);
     eng.stop.store(true, std::memory_order_release);
     if (eng.worker.joinable())
         eng.worker.join();

@@ -74,4 +74,11 @@ void EchoCancellationProcessor::process_capture(int16_t* pcm, std::size_t frames
         backend_slot().process_capture(handle_, pcm, frames);
 }
 
+bool EchoCancellationProcessor::statistics(ApmStatistics& out) const
+{
+    if (!handle_ || !backend_slot().statistics)
+        return false;
+    return backend_slot().statistics(handle_, &out);
+}
+
 } // namespace pm::audio

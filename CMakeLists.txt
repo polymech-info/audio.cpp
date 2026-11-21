@@ -91,6 +91,10 @@ set(PM_AUDIO_SOURCES
   src/stt/windows_ai_stt.cpp
   src/tts/windows_tts.cpp
   src/echo.cpp
+  src/aec3/aec3_framer.cpp
+  src/aec3/aec3_metrics.cpp
+  src/aec3/aec3_artifacts.cpp
+  src/aec3/aec3_lab.cpp
   src/vad.cpp
   src/vad_gate_selftest.cpp
   src/devices.cpp
@@ -311,6 +315,8 @@ if(NOT TARGET pm::commons)
 endif()
 if(TARGET pm::commons)
   target_link_libraries(pm-audio-lib PRIVATE pm::commons)
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../commons.cpp/src/process/process_helpers.hpp")
+  target_include_directories(pm-audio-lib PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../commons.cpp/src")
 endif()
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -325,8 +331,26 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     FetchContent_MakeAvailable(cli11)
   endif()
 
-  add_executable(pm-audio cli/main.cpp src/miniaudio_impl.cpp)
+  add_executable(pm-audio cli/main.cpp cli/aec3.cpp src/miniaudio_impl.cpp)
   target_link_libraries(pm-audio PRIVATE pm-audio-lib CLI11::CLI11)
+  option(PM_AUDIO_AEC3_LAB "Link the sibling vendored WebRTC APM into pm-audio aec3" ON)
+  set(PM_AUDIO_WEBRTC_ROOT "" CACHE PATH
+    "Vendored WebRTC tree with CMakeLists.txt. Empty uses ../webrtc when the lab option is on.")
+  if(PM_AUDIO_AEC3_LAB)
+    if(NOT TARGET webrtc_apm)
+      if(NOT PM_AUDIO_WEBRTC_ROOT AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../webrtc/CMakeLists.txt")
+        set(PM_AUDIO_WEBRTC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../webrtc")
+      endif()
+      if(NOT PM_AUDIO_WEBRTC_ROOT OR NOT EXISTS "${PM_AUDIO_WEBRTC_ROOT}/CMakeLists.txt")
+        message(FATAL_ERROR "PM_AUDIO_AEC3_LAB=ON but no vendored WebRTC CMakeLists.txt was found")
+      endif()
+      add_subdirectory("${PM_AUDIO_WEBRTC_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/webrtc_apm" EXCLUDE_FROM_ALL)
+    endif()
+    target_sources(pm-audio PRIVATE cli/aec3_webrtc_backend.cpp)
+    target_link_libraries(pm-audio PRIVATE webrtc_apm)
+    target_compile_definitions(pm-audio PRIVATE PM_AUDIO_AEC3_BACKEND_WEBRTC=1)
+    message(STATUS "pm-audio aec3: WebRTC APM linked")
+  endif()
   if(PM_AUDIO_SOUND_TRIGGER)
     target_sources(pm-audio PRIVATE cli/sound_trigger.cpp)
     target_compile_definitions(pm-audio PRIVATE PM_AUDIO_SOUND_TRIGGER=1)

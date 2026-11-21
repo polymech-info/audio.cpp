@@ -3,6 +3,7 @@
 #if defined(PM_AUDIO_SOUND_TRIGGER) && PM_AUDIO_SOUND_TRIGGER
 #include "sound_trigger.hpp"
 #endif
+#include "aec3.hpp"
 #include "pm/audio/pcm_record.hpp"
 #include "pm/audio/record_session.hpp"
 #include "pm/audio/filter/audio_filter.hpp"
@@ -452,6 +453,7 @@ int main(int argc, char** argv)
 #if defined(PM_AUDIO_SOUND_TRIGGER) && PM_AUDIO_SOUND_TRIGGER
     const SoundTriggerCli sound_trigger = add_sound_trigger(app);
 #endif
+    const Aec3Cli aec3 = add_aec3(app);
 
     auto* devices = app.add_subcommand("devices", "Count capture and playback devices");
     auto* runtimes = app.add_subcommand("runtimes", "Show ONNX and whisper.cpp pointed at Tanit");
@@ -502,6 +504,8 @@ int main(int argc, char** argv)
     if (sound_trigger.root && sound_trigger.root->parsed())
         return sound_trigger.run();
 #endif
+    if (aec3.root && aec3.root->parsed())
+        return aec3.run();
     if (devices->parsed())
         return cmd_devices();
     if (runtimes->parsed())

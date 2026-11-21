@@ -5,8 +5,8 @@
   "type": "module",
   "description": "Portable audio session, ElevenLabs clients, voice-over, and the sound trigger. Settings, models, and LLM speech stay in the host.",
   "scripts": {
-    "configure": "node scripts/cmake.mjs --preset dev",
-    "configure:release": "node scripts/cmake.mjs --preset release",
+    "configure": "node scripts/cmake.mjs --preset dev -DPM_AUDIO_AEC3_LAB=ON",
+    "configure:release": "node scripts/cmake.mjs --preset release -DPM_AUDIO_AEC3_LAB=ON",
     "build:cpp": "npm run configure && node scripts/cmake.mjs --build --preset dev --target pm-audio",
     "build:cpp-fast": "node scripts/ninja.mjs --preset dev --target pm-audio",
     "build:cpp:release": "npm run configure:release && node scripts/cmake.mjs --build --preset release --target pm-audio",

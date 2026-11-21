@@ -45,6 +45,8 @@ struct RecorderStatus {
 
 RecorderStatus recorder_start(const RecorderRequest& request);
 RecorderStatus recorder_set(bool gtcrn, bool aec, bool agc);
+// Keeps the mic open and drops samples, so the file does not grow while paused.
+void recorder_pause(bool on);
 RecorderStatus recorder_stop();
 RecorderStatus recorder_stats();
 

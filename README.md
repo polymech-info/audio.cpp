@@ -111,6 +111,8 @@ pm-audio sound-trigger match take.wav
 pm-audio sound-trigger train --id clap --json --samples take1.wav ... take8.wav --ambient room.wav --out clap.json
 pm-audio sound-trigger test
 pm-audio devices
+pm-audio aec3 devices
+pm-audio aec3 replay --capture mic.wav --render far.wav --out session --no-aec
 pm-audio runtimes
 ```
 
@@ -144,7 +146,7 @@ set(PM_AUDIO_ONNX_ROOT "/opt/onnxruntime" CACHE PATH "" FORCE)
 
 ## References Internal
 
-- [ASR-Commands - aka "Voice Commands"](./docs/asr-commands.md)
+- [AEC3 lab and rollout](./docs/aec3.md)
 - [Audio filters](./docs/audio-next-filters.md)
 - [Feature extraction, pattern matching (Ridge)](./docs/audio-patterns.md)
 - [Android Handsfree implementation notes](./docs/handsfree-android.md)

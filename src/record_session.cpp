@@ -1,5 +1,4 @@
 #include "pm/audio/record_session.hpp"
-#include "process/process_helpers.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -18,6 +17,7 @@
 #  endif
 #  include <windows.h>
 #  include <vector>
+#  include "process/process_helpers.hpp"
 #else
 #  include <csignal>
 #  include <cerrno>

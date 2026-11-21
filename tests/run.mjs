@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dir = dirname(fileURLToPath(import.meta.url));
-const files = ['test-selftest.mjs', 'test-vad-gate.mjs', 'test-match.mjs', 'test-subs.mjs', 'test-filter.mjs', 'test-stt.mjs', 'test-tts.mjs', 'test-voice.mjs', 'test-devices.mjs', 'test-record.mjs', 'test-trigger.mjs'];
+const files = ['test-selftest.mjs', 'test-vad-gate.mjs', 'test-match.mjs', 'test-subs.mjs', 'test-filter.mjs', 'test-stt.mjs', 'test-tts.mjs', 'test-voice.mjs', 'test-devices.mjs', 'test-record.mjs', 'test-trigger.mjs', 'test-aec3-cli.mjs'];
 
 let failed = 0;
 for (const file of files) {
