@@ -415,32 +415,6 @@ void measure_levels(const std::int16_t* pcm, std::size_t n, int& rms, int& peak)
     peak = max_abs;
 }
 
-void measure_bands(const std::int16_t* pcm, std::size_t n, std::array<int, 16>& bands)
-{
-    const std::size_t use = std::min(n, static_cast<std::size_t>(256));
-    if (use == 0) {
-        bands.fill(0);
-        return;
-    }
-    for (int b = 0; b < 16; ++b) {
-        const double w = 2.0 * k_pi * static_cast<double>(b + 1) * 4.0 / static_cast<double>(use);
-        const double coeff = 2.0 * std::cos(w);
-        double s1 = 0;
-        double s2 = 0;
-        for (std::size_t i = 0; i < use; ++i) {
-            const double s0 = static_cast<double>(pcm[i]) + coeff * s1 - s2;
-            s2 = s1;
-            s1 = s0;
-        }
-        const double cw = std::cos(w);
-        const double sw = std::sin(w);
-        const double re = s1 - s2 * cw;
-        const double im = s2 * sw;
-        const double mag = std::sqrt(re * re + im * im) / static_cast<double>(use);
-        bands[static_cast<std::size_t>(b)] = static_cast<int>(std::min(32767.0, mag));
-    }
-}
-
 struct PcmTap {
     static constexpr std::size_t cap = 16000 * 3;
     std::size_t limit;
@@ -652,7 +626,6 @@ struct Engine {
         bool rate_locked = false;
         int stream_rate = opened_rate;
         int silent_reads = 0;
-        auto bands_at = std::chrono::steady_clock::time_point{};
 
         local.ok = true;
         local.running = true;
@@ -667,12 +640,7 @@ struct Engine {
         auto write_block = [&](const std::int16_t* pcm, std::size_t n) -> bool {
             if (n == 0 || !pcm)
                 return true;
-            const auto now = std::chrono::steady_clock::now();
             measure_levels(pcm, n, local.rms, local.peak);
-            if (now >= bands_at) {
-                measure_bands(pcm, n, local.bands);
-                bands_at = now + std::chrono::milliseconds(80);
-            }
             if (!wav.write(pcm, n))
                 return false;
             local.frames_written += static_cast<std::int64_t>(n);

@@ -4,7 +4,6 @@
 // Noise remover, echo removal, and volume leveling save at 16 kHz.
 // With those off, the file is 48 kHz. The capture callback only copies.
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -40,7 +39,6 @@ struct RecorderStatus {
     std::int64_t last_process_ns = 0;
     int rms = 0;
     int peak = 0;
-    std::array<int, 16> bands{};
 };
 
 RecorderStatus recorder_start(const RecorderRequest& request);
